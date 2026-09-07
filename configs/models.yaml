@@ -1,0 +1,5 @@
+candidates:
+  - key: qwen05
+    name: Qwen2.5-0.5B-Instruct
+    hf_id: Qwen/Qwen2.5-0.5B-Instruct
+    max_ram_gb: 3.0

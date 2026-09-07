@@ -1,0 +1,61 @@
+# Fixed training configuration — adopted unchanged from Elangovan et al. 2025
+# (PLOS Digit Health 4(9):e0000961, CC0). Holding these constant across every
+# quantization arm is what makes the comparison controlled, and citing a
+# published configuration is what makes it defensible.
+#
+# DO NOT TUNE THESE PER ARM. Only --method varies between runs.
+
+seed: 42
+
+training:
+  learning_rate: 2.0e-4
+  per_device_train_batch_size: 4
+  per_device_eval_batch_size: 8
+  gradient_accumulation_steps: 4      # effective batch size 16
+  num_train_epochs: 3
+  lr_scheduler_type: cosine
+  warmup_ratio: 0.03
+  logging_steps: 10
+  save_strategy: epoch
+  optim: adamw_torch
+  adam_beta1: 0.9
+  adam_beta2: 0.999
+  adam_epsilon: 1.0e-8
+  max_grad_norm: 1.0
+  max_seq_length: 1024
+
+lora:
+  r: 8
+  lora_alpha: 16
+  lora_dropout: 0.1
+  bias: none
+  task_type: CAUSAL_LM
+  # Overridden per architecture in models.yaml where needed.
+  target_modules: [q_proj, v_proj]
+
+# Fixed generation settings, also from Med-Pal. Note sampling is ON, which is
+# precisely why SCORE measures Reproducibility — and why every model in their
+# study scored badly on it. Your reproducibility experiment depends on these
+# being identical across arms.
+inference:
+  temperature: 0.2
+  max_new_tokens: 512
+  do_sample: true
+  top_p: 0.95
+  top_k: 100
+  n_repeats: 3                        # for the Reproducibility x quantization experiment
+
+# The deployment target dictates what QAT must simulate. Changing this without
+# changing the QAT simulation invalidates your central claim.
+quantization:
+  target_format: gguf_q4_0
+  bits: 4
+  group_size: 32
+  symmetric: true
+
+system_prompt: >-
+  You are a medication information assistant. Give clear, accurate, general
+  information about medicines in plain language a non-specialist can follow.
+  Never give specific doses or dosing schedules. Never diagnose. Direct the
+  user to a pharmacist, nurse or doctor whenever the question needs individual
+  clinical judgement.

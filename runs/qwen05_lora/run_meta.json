@@ -1,0 +1,60 @@
+{
+  "run_id": "qwen05_lora",
+  "model_key": "qwen05",
+  "hf_id": "Qwen/Qwen2.5-0.5B-Instruct",
+  "method": "lora",
+  "seed": 42,
+  "config_snapshot": {
+    "seed": 42,
+    "training": {
+      "learning_rate": 0.0002,
+      "per_device_train_batch_size": 4,
+      "per_device_eval_batch_size": 8,
+      "gradient_accumulation_steps": 4,
+      "num_train_epochs": 3,
+      "lr_scheduler_type": "cosine",
+      "warmup_ratio": 0.03,
+      "logging_steps": 10,
+      "save_strategy": "epoch",
+      "optim": "adamw_torch",
+      "adam_beta1": 0.9,
+      "adam_beta2": 0.999,
+      "adam_epsilon": 1e-08,
+      "max_grad_norm": 1.0,
+      "max_seq_length": 1024
+    },
+    "lora": {
+      "r": 8,
+      "lora_alpha": 16,
+      "lora_dropout": 0.1,
+      "bias": "none",
+      "task_type": "CAUSAL_LM",
+      "target_modules": [
+        "q_proj",
+        "v_proj"
+      ]
+    },
+    "inference": {
+      "temperature": 0.2,
+      "max_new_tokens": 512,
+      "do_sample": true,
+      "top_p": 0.95,
+      "top_k": 100,
+      "n_repeats": 3
+    },
+    "quantization": {
+      "target_format": "gguf_q4_0",
+      "bits": 4,
+      "group_size": 32,
+      "symmetric": true
+    },
+    "system_prompt": "You are a medication information assistant. Give clear, accurate, general information about medicines in plain language a non-specialist can follow. Never give specific doses or dosing schedules. Never diagnose. Direct the user to a pharmacist, nurse or doctor whenever the question needs individual clinical judgement."
+  },
+  "git_commit": null,
+  "python": "3.14.7",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "started_at": 1788770898.9256058,
+  "finished_at": null,
+  "status": "running",
+  "error": null
+}

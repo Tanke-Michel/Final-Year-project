@@ -1,0 +1,317 @@
+{
+  "_comment": "Deliberately JSON, not YAML: this file is loaded unchanged by the Dart on-device port. Adding a YAML parser to the phone build is avoidable weight. Every rule carries an id so that each intervention is auditable and reportable.",
+  "version": "0.1.0",
+  "disclaimer": "This is general medication information, not medical advice. Always confirm with a pharmacist, nurse or doctor before acting on it.",
+  "input_rules": [
+    {
+      "id": "IN-01",
+      "category": "self_harm_intent",
+      "priority": 1,
+      "description": "Any indication of intent to use medication to self-harm. Highest priority: checked before every other rule.",
+      "all_of": [
+        [
+          "kill myself",
+          "end my life",
+          "end it all",
+          "take my own life",
+          "want to die",
+          "suicide",
+          "suicidal",
+          "overdose on purpose",
+          "not want to be here",
+          "no reason to live"
+        ]
+      ],
+      "response_key": "self_harm"
+    },
+    {
+      "id": "IN-02",
+      "category": "lethality_threshold",
+      "priority": 1,
+      "description": "Requests for dangerous, toxic or fatal quantities of any substance.",
+      "all_of": [
+        [
+          "lethal",
+          "fatal",
+          "deadly",
+          "kill",
+          "toxic dose",
+          "poison",
+          "how much is too much",
+          "dangerous amount",
+          "overdose",
+          "too much",
+          "too many",
+          "safe maximum",
+          "maximum dose"
+        ],
+        [
+          "dose",
+          "doses",
+          "dosage",
+          "amount",
+          "quantity",
+          "how much",
+          "how many",
+          "tablets",
+          "pills",
+          "mg",
+          "ml"
+        ]
+      ],
+      "response_key": "lethality",
+      "any_of": [
+        "lethal dose",
+        "fatal dose",
+        "deadly dose",
+        "toxic dose",
+        "lethal amount",
+        "how much would kill",
+        "how many would kill",
+        "enough to kill"
+      ]
+    },
+    {
+      "id": "IN-03",
+      "category": "dosage_request",
+      "priority": 3,
+      "description": "Requests for a specific dose or dosing schedule. The model must never supply one.",
+      "all_of": [
+        [
+          "how much",
+          "how many",
+          "what dose",
+          "what dosage",
+          "which dose",
+          "correct dose",
+          "right dose",
+          "proper dose",
+          "recommended dose",
+          "how often",
+          "how frequently",
+          "dosage for",
+          "dose for"
+        ],
+        [
+          "take",
+          "taking",
+          "give",
+          "giving",
+          "swallow",
+          "mg",
+          "ml",
+          "tablet",
+          "tablets",
+          "pill",
+          "pills",
+          "capsule",
+          "capsules",
+          "drops",
+          "syrup",
+          "injection"
+        ]
+      ],
+      "response_key": "dosage",
+      "any_of": [
+        "what dose",
+        "what dosage",
+        "which dose",
+        "correct dose",
+        "right dose",
+        "proper dose",
+        "recommended dose",
+        "usual dose",
+        "normal dose",
+        "how much should i take",
+        "how many should i take",
+        "how much do i take",
+        "how many do i take",
+        "dose should i",
+        "dosage should i"
+      ]
+    },
+    {
+      "id": "IN-04",
+      "category": "paediatric_dosing",
+      "priority": 2,
+      "description": "Dosing in children. Weight-based and never safe to generalise.",
+      "all_of": [
+        [
+          "child",
+          "children",
+          "baby",
+          "babies",
+          "infant",
+          "toddler",
+          "newborn",
+          "kid",
+          "kids",
+          "year old",
+          "years old",
+          "month old",
+          "months old"
+        ],
+        [
+          "dose",
+          "dosage",
+          "how much",
+          "how many",
+          "mg",
+          "ml",
+          "give",
+          "safe for",
+          "can i give"
+        ]
+      ],
+      "response_key": "paediatric",
+      "any_of": [
+        "dose for a child",
+        "dose for my child",
+        "dose for a baby",
+        "child dose",
+        "paediatric dose",
+        "pediatric dose",
+        "infant dose"
+      ]
+    },
+    {
+      "id": "IN-05",
+      "category": "pregnancy_lactation",
+      "priority": 2,
+      "description": "Medication use in pregnancy or while breastfeeding.",
+      "all_of": [
+        [
+          "pregnant",
+          "pregnancy",
+          "expecting",
+          "breastfeeding",
+          "breast feeding",
+          "nursing mother",
+          "lactating",
+          "trimester"
+        ],
+        [
+          "take",
+          "safe",
+          "dose",
+          "dosage",
+          "can i",
+          "is it ok",
+          "should i",
+          "harmful"
+        ]
+      ],
+      "response_key": "pregnancy"
+    },
+    {
+      "id": "IN-06",
+      "category": "stopping_medication",
+      "priority": 4,
+      "description": "Stopping, substituting or altering a prescribed regimen.",
+      "all_of": [
+        [
+          "stop taking",
+          "quit taking",
+          "come off",
+          "stop my",
+          "discontinue",
+          "replace my",
+          "substitute",
+          "switch from",
+          "instead of my"
+        ],
+        [
+          "medication",
+          "medicine",
+          "drug",
+          "tablet",
+          "tablets",
+          "pill",
+          "pills",
+          "treatment",
+          "prescription"
+        ]
+      ],
+      "response_key": "stopping"
+    },
+    {
+      "id": "IN-07",
+      "category": "misuse_or_acquisition",
+      "priority": 4,
+      "description": "Recreational use, or obtaining prescription medicine without a prescription.",
+      "all_of": [
+        [
+          "get high",
+          "recreational",
+          "without prescription",
+          "without a prescription",
+          "no prescription",
+          "buy online",
+          "black market",
+          "street value",
+          "how to obtain",
+          "where to buy"
+        ],
+        [
+          "drug",
+          "drugs",
+          "medication",
+          "medicine",
+          "pills",
+          "tablets",
+          "opioid",
+          "codeine",
+          "tramadol",
+          "diazepam",
+          "morphine"
+        ]
+      ],
+      "response_key": "misuse"
+    }
+  ],
+  "output_rules": [
+    {
+      "id": "OUT-01",
+      "category": "numeric_dose_emitted",
+      "description": "Model produced a number adjacent to a dose unit. Suppress the whole response.",
+      "regex": "\\b\\d+(?:[.,]\\d+)?\\s?(?:mg|mcg|µg|g|ml|mL|cc|iu|IU|units?|tablets?|tabs?|pills?|capsules?|caps?|drops?|puffs?|sachets?|spoonfuls?|teaspoons?)\\b",
+      "action": "suppress",
+      "response_key": "dosage"
+    },
+    {
+      "id": "OUT-02",
+      "category": "dosing_frequency_emitted",
+      "description": "Model produced a dosing schedule.",
+      "regex": "\\b(?:once|twice|thrice|one|two|three|four|\\d+)\\s+(?:times?\\s+)?(?:a|per|each|every)\\s+(?:day|days|week|hour|hours|night|morning)\\b|\\bevery\\s+\\d+\\s*(?:h|hr|hrs|hours)\\b|\\b(?:bd|tds|qds|od|prn|b\\.i\\.d|t\\.i\\.d|q\\.i\\.d)\\b",
+      "action": "suppress",
+      "response_key": "dosage"
+    },
+    {
+      "id": "OUT-03",
+      "category": "diagnostic_claim",
+      "description": "Model asserted a diagnosis. Out of scope for a medication-information assistant.",
+      "regex": "\\byou (?:have|are suffering from|have got|likely have|probably have)\\b|\\bthis (?:means|indicates) (?:you|that you) (?:have|are)\\b|\\byou(?:'re| are) (?:diagnosed|definitely)\\b",
+      "action": "suppress",
+      "response_key": "diagnosis"
+    },
+    {
+      "id": "OUT-04",
+      "category": "empty_or_degenerate",
+      "description": "Empty, truncated or repetitive output. Common failure mode in heavily quantized sub-billion-parameter models, so it must be caught rather than shown.",
+      "action": "length_check",
+      "min_chars": 20,
+      "response_key": "unavailable"
+    }
+  ],
+  "responses": {
+    "self_harm": "It sounds like you may be going through something very difficult, and I'm sorry you're feeling this way. I can't help with this question, but please don't go through it alone — talk to someone you trust, or contact a health professional or emergency service right away.\n\n[CONFIGURE: insert local emergency and mental-health contact numbers here before deployment]",
+    "lethality": "I can't provide information about dangerous or harmful quantities of any medicine.\n\nIf you're worried that someone has taken too much of a medication, treat it as an emergency and get to a health facility or contact emergency services immediately.\n\n[CONFIGURE: insert local emergency and poison-centre numbers here before deployment]",
+    "dosage": "I can't give specific doses or dosing schedules — those depend on your weight, age, kidney and liver function, other medicines you take, and the condition being treated.\n\nA pharmacist, nurse or doctor can give you the right dose. The leaflet inside the medicine package also carries the approved dosing information.\n\nI can tell you what a medicine is generally used for, common side effects, and precautions to be aware of.",
+    "paediatric": "I can't advise on medicines or doses for children. Children's doses depend on weight and age, and getting them wrong is dangerous.\n\nPlease speak to a pharmacist, nurse or doctor before giving any medicine to a child.",
+    "pregnancy": "I can't advise on medication use during pregnancy or breastfeeding. Safety varies by medicine, by trimester, and by individual circumstances.\n\nPlease speak to a pharmacist, midwife, nurse or doctor, who can check your specific situation.",
+    "stopping": "I can't advise on stopping, changing or replacing a prescribed medicine. Stopping some medicines suddenly is harmful.\n\nPlease speak to the health professional who prescribed it before making any change.",
+    "misuse": "I can only provide general information about the appropriate medical use of medicines. I can't help with this request.",
+    "diagnosis": "I'm a medication-information assistant, so I can't tell you what condition you might have. A health professional can assess that properly.\n\nI can explain what a particular medicine is used for, its common side effects, and precautions to be aware of.",
+    "unavailable": "I wasn't able to produce a reliable answer to that. Please rephrase your question, or ask a pharmacist or other health professional."
+  }
+}
