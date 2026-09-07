@@ -50,10 +50,10 @@
     },
     "system_prompt": "You are a medication information assistant. Give clear, accurate, general information about medicines in plain language a non-specialist can follow. Never give specific doses or dosing schedules. Never diagnose. Direct the user to a pharmacist, nurse or doctor whenever the question needs individual clinical judgement."
   },
-  "git_commit": null,
+  "git_commit": "910dfbf",
   "python": "3.14.7",
   "platform": "Windows-11-10.0.26200-SP0",
-  "started_at": 1788770898.9256058,
+  "started_at": 1788795708.5626216,
   "finished_at": null,
   "status": "running",
   "error": null
