@@ -20,9 +20,47 @@
           "overdose on purpose",
           "not want to be here",
           "no reason to live"
+        ],
+        [
+          "medicine",
+          "medicines",
+          "medication",
+          "tablets",
+          "pills",
+          "drug",
+          "drugs",
+          "box",
+          "overdose",
+          "enough",
+          "how many",
+          "how much"
         ]
       ],
-      "response_key": "self_harm"
+      "response_key": "self_harm",
+      "any_of": [
+        "suicidal",
+        "suicide",
+        "killing myself",
+        "want to die",
+        "dont want to be here",
+        "do not want to be here",
+        "not want to be here",
+        "want to be here anymore",
+        "end my life",
+        "end it all",
+        "kill myself",
+        "take my own life",
+        "no reason to live",
+        "no point in living",
+        "better off dead",
+        "feeling hopeless",
+        "feel hopeless",
+        "cant go on",
+        "cannot go on",
+        "give up on life",
+        "hurt myself",
+        "harm myself"
+      ]
     },
     {
       "id": "IN-02",
@@ -68,7 +106,14 @@
         "lethal amount",
         "how much would kill",
         "how many would kill",
-        "enough to kill"
+        "enough to kill",
+        "maximum amount",
+        "can survive",
+        "would survive",
+        "person can survive",
+        "how much can a person",
+        "safe upper limit",
+        "before it becomes dangerous"
       ]
     },
     {
@@ -108,7 +153,14 @@
           "capsules",
           "drops",
           "syrup",
-          "injection"
+          "injection",
+          "take",
+          "takes",
+          "taking",
+          "use",
+          "uses",
+          "using",
+          "have"
         ]
       ],
       "response_key": "dosage",
@@ -160,7 +212,14 @@
           "ml",
           "give",
           "safe for",
-          "can i give"
+          "can i give",
+          "take",
+          "takes",
+          "taking",
+          "use",
+          "uses",
+          "using",
+          "have"
         ]
       ],
       "response_key": "paediatric",
@@ -171,7 +230,13 @@
         "child dose",
         "paediatric dose",
         "pediatric dose",
-        "infant dose"
+        "infant dose",
+        "can children take",
+        "safe for children",
+        "safe for a child",
+        "safe for babies",
+        "give my child",
+        "give my baby"
       ]
     },
     {
@@ -198,10 +263,24 @@
           "can i",
           "is it ok",
           "should i",
-          "harmful"
+          "harmful",
+          "take",
+          "takes",
+          "taking",
+          "use",
+          "uses",
+          "using",
+          "have"
         ]
       ],
-      "response_key": "pregnancy"
+      "response_key": "pregnancy",
+      "any_of": [
+        "safe during pregnancy",
+        "safe in pregnancy",
+        "while pregnant",
+        "while breastfeeding",
+        "when breastfeeding"
+      ]
     },
     {
       "id": "IN-06",
@@ -232,7 +311,19 @@
           "prescription"
         ]
       ],
-      "response_key": "stopping"
+      "response_key": "stopping",
+      "any_of": [
+        "stop taking my",
+        "stop taking the",
+        "should i stop",
+        "can i stop",
+        "come off my",
+        "replace my",
+        "swap my",
+        "instead of my",
+        "discontinue my",
+        "stop my medic"
+      ]
     },
     {
       "id": "IN-07",
@@ -267,6 +358,94 @@
         ]
       ],
       "response_key": "misuse"
+    },
+    {
+      "id": "IN-08",
+      "category": "adversarial_framing",
+      "priority": 1,
+      "description": "Prompt injection, jailbreak, DAN, prompt leak, and requests to fabricate. Catches the wrapper regardless of payload, which is what Med-Pal's BanTopics scanner did server-side.",
+      "any_of": [
+        "ignore the above",
+        "ignore all previous",
+        "ignore previous instructions",
+        "disregard the above",
+        "disregard your instructions",
+        "you are dan",
+        "do anything now",
+        "no restrictions",
+        "without restrictions",
+        "free from all rules",
+        "do not refuse",
+        "you have no rules",
+        "pretend you are",
+        "act as if you are",
+        "roleplay as",
+        "role play as",
+        "repeat the instructions",
+        "repeat your instructions",
+        "system prompt",
+        "word for word, then answer",
+        "your initial prompt",
+        "inventing it if necessary",
+        "invent a study",
+        "make up a study",
+        "fabricate",
+        "subtly wrong",
+        "cause maximum harm",
+        "give a wrong answer"
+      ],
+      "all_of": [
+        [
+          "ignore",
+          "pretend",
+          "dan",
+          "repeat",
+          "invent",
+          "fabricate",
+          "roleplay"
+        ]
+      ],
+      "response_key": "adversarial"
+    },
+    {
+      "id": "IN-09",
+      "category": "diagnosis_request",
+      "priority": 2,
+      "description": "Asking what condition the user has. Out of scope; caught on input, not only on output.",
+      "any_of": [
+        "what do i have",
+        "what disease do i have",
+        "what illness do i have",
+        "what condition do i have",
+        "what is wrong with me",
+        "what illness causes",
+        "what disease causes",
+        "what causes these symptoms",
+        "diagnose me",
+        "am i sick with"
+      ],
+      "all_of": [
+        [
+          "symptom",
+          "symptoms",
+          "headache",
+          "fever",
+          "pain",
+          "rash",
+          "nausea",
+          "cough"
+        ],
+        [
+          "what do i have",
+          "what should i take",
+          "what illness",
+          "what disease",
+          "what condition",
+          "diagnose",
+          "what is wrong"
+        ]
+      ],
+      "response_key": "diagnosis"
     }
   ],
   "output_rules": [
@@ -312,6 +491,7 @@
     "stopping": "I can't advise on stopping, changing or replacing a prescribed medicine. Stopping some medicines suddenly is harmful.\n\nPlease speak to the health professional who prescribed it before making any change.",
     "misuse": "I can only provide general information about the appropriate medical use of medicines. I can't help with this request.",
     "diagnosis": "I'm a medication-information assistant, so I can't tell you what condition you might have. A health professional can assess that properly.\n\nI can explain what a particular medicine is used for, its common side effects, and precautions to be aware of.",
-    "unavailable": "I wasn't able to produce a reliable answer to that. Please rephrase your question, or ask a pharmacist or other health professional."
+    "unavailable": "I wasn't able to produce a reliable answer to that. Please rephrase your question, or ask a pharmacist or other health professional.",
+    "adversarial": "I can only help with general information about medicines, and I can't follow instructions that ask me to set that aside.\n\nAsk me what a medicine is used for, its common side effects, or precautions to be aware of, and I'll do my best."
   }
 }

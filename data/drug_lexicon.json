@@ -1,0 +1,54 @@
+{
+  "_comment": "Medication-relevance lexicon. Deliberately weighted toward the WHO Essential Medicines List and the disease burden of sub-Saharan primary care — antimalarials, ARVs, TB regimens — rather than a Western outpatient formulary. Med-Pal used 110 medications from a Singapore hospital system; that formulary is the wrong one for this deployment context, and swapping it is part of what makes the project locally grounded. VERIFY spellings and add local brand names before Day 5.",
+  "_usage": "Used by build_dataset.py to filter a source corpus for medication-related content. Recall matters more than precision here: a missed drug name drops a usable training item, whereas a false positive gets caught downstream by domain classification.",
+
+  "generic": {
+    "antimalarial": ["artemether", "lumefantrine", "artesunate", "amodiaquine", "sulfadoxine", "pyrimethamine", "quinine", "chloroquine", "primaquine", "dihydroartemisinin", "piperaquine", "mefloquine"],
+    "antibacterial": ["amoxicillin", "ampicillin", "benzylpenicillin", "cloxacillin", "ceftriaxone", "cefixime", "cefuroxime", "ciprofloxacin", "azithromycin", "erythromycin", "doxycycline", "metronidazole", "cotrimoxazole", "trimethoprim", "sulfamethoxazole", "gentamicin", "chloramphenicol", "nitrofurantoin", "clavulanate"],
+    "antituberculosis": ["isoniazid", "rifampicin", "rifampin", "pyrazinamide", "ethambutol", "streptomycin"],
+    "antiretroviral": ["tenofovir", "lamivudine", "zidovudine", "dolutegravir", "efavirenz", "nevirapine", "abacavir", "emtricitabine", "ritonavir", "lopinavir", "atazanavir"],
+    "antifungal": ["fluconazole", "griseofulvin", "nystatin", "ketoconazole", "clotrimazole", "amphotericin"],
+    "anthelmintic": ["albendazole", "mebendazole", "praziquantel", "ivermectin", "levamisole"],
+    "analgesic_nsaid": ["paracetamol", "acetaminophen", "ibuprofen", "diclofenac", "aspirin", "tramadol", "morphine", "codeine", "indomethacin", "naproxen"],
+    "antidiabetic": ["metformin", "glibenclamide", "gliclazide", "insulin", "glimepiride"],
+    "cardiovascular": ["amlodipine", "nifedipine", "hydrochlorothiazide", "furosemide", "atenolol", "bisoprolol", "propranolol", "enalapril", "lisinopril", "captopril", "losartan", "methyldopa", "spironolactone", "digoxin", "atorvastatin", "simvastatin", "warfarin", "clopidogrel"],
+    "respiratory": ["salbutamol", "beclometasone", "beclomethasone", "aminophylline", "ipratropium"],
+    "gastrointestinal": ["omeprazole", "ranitidine", "cimetidine", "ondansetron", "metoclopramide", "loperamide", "hyoscine", "lansoprazole"],
+    "cns": ["carbamazepine", "phenytoin", "phenobarbital", "valproate", "diazepam", "amitriptyline", "fluoxetine", "haloperidol", "chlorpromazine", "risperidone", "olanzapine"],
+    "antihistamine": ["chlorphenamine", "chlorpheniramine", "cetirizine", "loratadine", "promethazine"],
+    "corticosteroid": ["prednisolone", "dexamethasone", "hydrocortisone"],
+    "supplement": ["folic acid", "ferrous sulfate", "ferrous sulphate", "vitamin a", "vitamin d", "zinc", "calcium", "magnesium"],
+    "hormonal": ["levonorgestrel", "medroxyprogesterone", "ethinylestradiol", "oxytocin", "misoprostol", "levothyroxine"],
+    "other": ["allopurinol", "tamoxifen", "oral rehydration salts", "ors"]
+  },
+
+  "brand_to_generic": {
+    "panadol": "paracetamol",
+    "coartem": "artemether-lumefantrine",
+    "glucophage": "metformin",
+    "augmentin": "amoxicillin-clavulanate",
+    "flagyl": "metronidazole",
+    "ventolin": "salbutamol",
+    "zyrtec": "cetirizine",
+    "losec": "omeprazole",
+    "septrin": "cotrimoxazole",
+    "bactrim": "cotrimoxazole",
+    "voltaren": "diclofenac",
+    "brufen": "ibuprofen",
+    "zithromax": "azithromycin"
+  },
+
+  "intent_phrases": [
+    "side effect", "side effects", "adverse", "interaction", "interacts",
+    "contraindicat", "precaution", "what is it used for", "used to treat",
+    "how does it work", "mechanism", "allergy", "allergic", "prescription",
+    "prescribed", "medicine", "medication", "drug", "tablet", "tablets",
+    "capsule", "syrup", "injection", "pharmacy", "pharmacist", "store",
+    "storage", "expired", "with food", "empty stomach", "missed a dose"
+  ],
+
+  "exclusion_phrases": [
+    "surgery", "operation", "x-ray", "scan", "biopsy", "physiotherapy",
+    "insurance", "hospital bill", "appointment", "waiting time"
+  ]
+}

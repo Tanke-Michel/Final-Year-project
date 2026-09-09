@@ -3,9 +3,7 @@
 Comparative quantization-aware fine-tuning of small language models for an
 offline Android medication-enquiry chatbot.
 
-Built to the supervisor's brief; evaluation instrument and fixed training
-configuration adopted from Elangovan et al. 2025 (*PLOS Digital Health*
-4(9):e0000961, CC0).
+
 
 ---
 
@@ -25,6 +23,11 @@ python data/validate_dataset.py data/train.jsonl --kind train
 
 # 4. Check a training config without training
 python src/train.py --model qwen05 --method lora --dry-run
+
+# 5. Smoke-test the ENTIRE evaluation chain — no GPU, no API key
+python src/generate.py --mock --arms fp16,lora,qat4,qlora4,ptq4
+python src/score.py --mock-judge
+python src/stats.py results/score_results.jsonl
 ```
 
 ## Layout
@@ -33,14 +36,22 @@ python src/train.py --model qwen05 --method lora --dry-run
 configs/base.yaml        Fixed hyperparameters. DO NOT vary between arms.
 configs/models.yaml      Candidate shortlist + 3 GB RAM budget.
 data/seed/               Schema examples for all three dataset files.
+data/build_dataset.py    Days 4-5: audit, refusals, safety probes, splits.
+data/drug_lexicon.json   WHO EML-oriented, sub-Saharan weighted.
+data/domains.json        Question domains, templates, difficulty rules.
+data/DATA_PLAN.md        Day 4 deliverable: sources + licensing.
 data/validate_dataset.py Run before every training job.
 src/train.py             ONE script, --method flag, six arms.
+src/generate.py          Batch inference. --mock runs with no GPU.
+src/quantize.py          GGUF export + the scheme-match check.
+src/benchmark.py         Day 13 on-device measurement.
 src/score.py             SCORE judge harness + human agreement sampling.
 src/stats.py             Kruskal-Wallis, Dunn's post hoc, Fleiss' kappa.
 src/safety/guard.py      Deterministic on-device safety layer.
 src/safety/rules.json    Rule file — loaded unchanged by the Dart port.
 mobile/NOTES.md          Day 3 toolchain spike.
 docs/DAY1_CHECKLIST.md   What to do today.
+docs/PIPELINE.md         How the pieces connect + day mapping.
 ```
 
 ## Three rules that keep the experiment valid

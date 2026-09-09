@@ -1,5 +1,88 @@
+_constraint: "HARD LIMIT: total parameters < 0.5B. SmolLM2-1.7B removed \u2014 it was 3.4x over. State\
+  \ in your thesis whether you count TOTAL or NON-EMBEDDING parameters; the two differ sharply at this\
+  \ scale (Qwen2.5-0.5B is 0.49B total but 0.36B non-embedding, and Gemma-3-270M is 63% embedding)."
+_reality_check: 'Med-Pal combined safety+accuracy: Mistral-7B 71.9 | TinyLlama-1.1B 39.4 | Danube-1.8B
+  18.2. Every candidate below is a QUARTER the size of Danube-1.8B or smaller. Expect low absolute quality
+  and frame the study as locating the floor.'
 candidates:
-  - key: qwen05
-    name: Qwen2.5-0.5B-Instruct
-    hf_id: Qwen/Qwen2.5-0.5B-Instruct
-    max_ram_gb: 3.0
+- key: qwen05
+  hf_id: Qwen/Qwen2.5-0.5B-Instruct
+  params_total: 494000000
+  params_non_embedding: 360000000
+  role: primary
+  target_modules:
+  - q_proj
+  - v_proj
+  est_q4_mb: 400
+  verified: false
+  note: Largest model still under the limit. Full six-arm method sweep runs here.
+- key: gemma270
+  hf_id: google/gemma-3-270m-it
+  params_total: 270000000
+  params_non_embedding: 100000000
+  role: secondary
+  target_modules:
+  - q_proj
+  - v_proj
+  est_q4_mb: 240
+  verified: false
+  note: 'HIGH VALUE. Google publishes official INT4 QAT checkpoints for this model, giving you a published
+    QAT reference to compare your own against. Architecture matters for your mixed-precision arm: 170M
+    of 270M params are embeddings (256k vocab), so holding embeddings at higher precision protects 63%
+    of the model. Reported IFEval 51.2, above Qwen2.5-0.5B-Instruct.'
+- key: smol360
+  hf_id: HuggingFaceTB/SmolLM2-360M-Instruct
+  params_total: 362000000
+  params_non_embedding: null
+  role: secondary
+  target_modules:
+  - q_proj
+  - v_proj
+  est_q4_mb: 270
+  verified: false
+  note: Designed for on-device. SFT + DPO on UltraFeedback.
+- key: lfm350
+  hf_id: LiquidAI/LFM2-350M
+  params_total: 350000000
+  params_non_embedding: null
+  role: candidate
+  target_modules: null
+  est_q4_mb: 260
+  verified: false
+  note: "Reported IFEval 65.12, the strongest instruction-following in this size class. VERIFY licence\
+    \ and llama.cpp/GGUF support before committing \u2014 non-standard architectures sometimes lack converter\
+    \ support, which would break your Day 12 deployment."
+- key: smol135
+  hf_id: HuggingFaceTB/SmolLM2-135M-Instruct
+  params_total: 135000000
+  params_non_embedding: null
+  role: floor_probe
+  target_modules:
+  - q_proj
+  - v_proj
+  est_q4_mb: 110
+  verified: false
+  note: "The floor. Include one arm here purely to establish where quality collapses entirely \u2014 that\
+    \ lower bound is what makes 'we located the compression floor' a measured claim rather than an assertion."
+- key: medical_slm
+  hf_id: TBD
+  params_total: null
+  params_non_embedding: null
+  role: literature_pick
+  target_modules: null
+  est_q4_mb: null
+  verified: false
+  note: "Brief 6.1 asks for a medical/health SLM. Under 0.5B the options are thin: BioMistral (7B), Meerkat\
+    \ (7B) and BioMedLM (2.7B) are all far too large. BioGPT (~347M, GPT-2 based, biomedical pretraining)\
+    \ is the main candidate that fits, but it is NOT instruction-tuned, so it needs heavier SFT and may\
+    \ not support a chat template. Verify size and licence on the model card, and be prepared to report\
+    \ that no suitable instruction-tuned medical SLM exists below 0.5B \u2014 that is itself a finding\
+    \ worth stating."
+device_budget:
+  total_ram_mb: 3072
+  assume_os_and_app_mb: 1600
+  usable_mb: 1472
+  note: "At <0.5B every candidate is 110-400 MB at 4-bit, so memory is NO LONGER the binding constraint\
+    \ \u2014 quality and safety are. Say this explicitly in your discussion: it reframes the contribution\
+    \ from 'can it fit' to 'is it good enough to be safe'. Latency, battery and thermal behaviour still\
+    \ matter and still need measuring."

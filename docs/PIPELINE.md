@@ -1,10 +1,6 @@
 # Pipeline
 
 ```
-raw source ──► data/build_dataset.py ──► data/{train,val,test}.jsonl
-                  audit | refusals | safety | build
-                            │
-                            ▼
 data/train.jsonl ──► src/train.py ──► runs/{model}_{method}/final
                         │ --method fp16|lora|qlora4|qat8|qat4|qat_mixed
                         ▼
@@ -56,11 +52,6 @@ conclusion. `stats.py` prints a power warning when the numbers get thin.
 
 | Brief day | Command |
 |---|---|
-| 4 | `python data/build_dataset.py audit --source raw/afrimedqa.jsonl` |
-| 5 | `python data/build_dataset.py refusals --n 300 --out data/refusals.jsonl` |
-| 5 | `python data/build_dataset.py safety --out data/eval_safety.jsonl` |
-| 5 | `python data/build_dataset.py build --source raw/... data/refusals.jsonl --out data/` | OR
-| 5 | `python data/build_dataset.py build --source raw/afrimedqa.jsonl data/refusals.jsonl --out data/` |
 | 5 | `python data/validate_dataset.py data/train.jsonl --kind train` |
 | 6 | mock chain above + `python src/train.py --model qwen05 --method lora --dry-run` |
 | 6 | `python src/quantize.py --run runs/qwen05_qat4 --verify-only` |
