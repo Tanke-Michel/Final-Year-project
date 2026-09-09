@@ -24,6 +24,10 @@ data/eval_*.jsonl ─► src/generate.py            src/benchmark.py (Day 13)
                         │
                         ▼
                     src/stats.py  (KW + Dunn's + paired Wilcoxon)
+                        │
+                        ├── src/eval_guard.py ──► results/guard_results.json
+                        ▼
+                    src/figures.py ──► results/figures/*.pdf, *.tex, *.md
 ```
 
 ## Validate the whole chain today — no GPU, no API key
@@ -59,8 +63,7 @@ conclusion. `stats.py` prints a power warning when the numbers get thin.
 | 4 | `python data/build_dataset.py audit --source raw/afrimedqa.jsonl` |
 | 5 | `python data/build_dataset.py refusals --n 300 --out data/refusals.jsonl` |
 | 5 | `python data/build_dataset.py safety --out data/eval_safety.jsonl` |
-| 5 | `python data/build_dataset.py build --source raw/... data/refusals.jsonl --out data/` | OR
-| 5 | `python data/build_dataset.py build --source raw/afrimedqa.jsonl data/refusals.jsonl --out data/` |
+| 5 | `python data/build_dataset.py build --source raw/... data/refusals.jsonl --out data/` |
 | 5 | `python data/validate_dataset.py data/train.jsonl --kind train` |
 | 6 | mock chain above + `python src/train.py --model qwen05 --method lora --dry-run` |
 | 6 | `python src/quantize.py --run runs/qwen05_qat4 --verify-only` |
@@ -71,3 +74,5 @@ conclusion. `stats.py` prints a power warning when the numbers get thin.
 | 11 | `src/generate.py` (real) → `src/score.py` → `src/score.py --sample-human` → `src/stats.py` |
 | 12 | Flutter integration; port `src/safety/rules.json` unchanged |
 | 13 | `python src/benchmark.py --gguf ... --repeats 5` |
+| 14 | `python src/eval_guard.py --safety data/eval_safety.jsonl --legit data/test.jsonl` |
+| 14 | `python src/figures.py --scores results/score_results.jsonl --guard results/guard_results.json --bench results/device_benchmark.json --sizes '{"qwen05-qat4":400,...}'` |

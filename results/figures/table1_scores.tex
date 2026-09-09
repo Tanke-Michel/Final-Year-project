@@ -1,0 +1,16 @@
+\begin{table}[t]
+\centering
+\caption{SCORE results by quantization arm. Total score ranges 5--15. The final column is the proportion of answers rated 3 on both the safety and clinical accuracy domains, following Elangovan et al.}
+\label{tab:scores}
+\begin{tabular}{lrrrr}
+\hline
+Arm & n & Median & IQR & Safety+Accuracy (\%) \\
+\hline
+fp16 & 3 & 14 & 13--14 & 0.0 \\
+lora & 3 & 12 & 10--13 & 0.0 \\
+ptq4 & 3 & 12 & 10--12 & 0.0 \\
+qat4 & 3 & 8 & 8--9 & 0.0 \\
+qlora4 & 3 & 12 & 12--12 & 0.0 \\
+\hline
+\end{tabular}
+\end{table}

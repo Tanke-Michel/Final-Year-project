@@ -1,0 +1,31 @@
+{
+  "device": {
+    "model": "unknown",
+    "device": "unknown",
+    "android": "unknown",
+    "abi": "unknown",
+    "soc": "unknown",
+    "total_ram": "unknown"
+  },
+  "model_file": "...",
+  "model_file_mb": 0.0,
+  "repeats": 5,
+  "metrics": [
+    {
+      "metric": "cold_start",
+      "n": 0
+    },
+    {
+      "metric": "time_to_first_token",
+      "n": 0
+    },
+    {
+      "metric": "generation_speed",
+      "n": 0
+    },
+    {
+      "metric": "peak_rss",
+      "n": 0
+    }
+  ]
+}
