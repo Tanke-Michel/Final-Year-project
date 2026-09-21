@@ -72,7 +72,9 @@ conclusion. `stats.py` prints a power warning when the numbers get thin.
 | 9 | `--method qat8`, `--method qat4` |
 | 10 | `--method qat_mixed`, then `src/quantize.py` for PTQ baselines |
 | 11 | `src/generate.py` (real) → `src/score.py` → `src/score.py --sample-human` → `src/stats.py` |
-| 12 | Flutter integration; port `src/safety/rules.json` unchanged |
+| 12 | `./mobile/sync_rules.sh`, then swap `MockLlmService` for `LlamaCppService` in `mobile/lib/main.dart` |
 | 13 | `python src/benchmark.py --gguf ... --repeats 5` |
 | 14 | `python src/eval_guard.py --safety data/eval_safety.jsonl --legit data/test.jsonl` |
 | 14 | `python src/figures.py --scores results/score_results.jsonl --guard results/guard_results.json --bench results/device_benchmark.json --sizes '{"qwen05-qat4":400,...}'` |
+| 14 | `cd paper && make` (pulls the regenerated tables and figures automatically) |
+| 14 | `cd paper && make check` — must pass before submission |

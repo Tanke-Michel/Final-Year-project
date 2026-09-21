@@ -27,11 +27,14 @@ n_repeats generations of the same question, not from a single answer.
 from __future__ import annotations
 
 import argparse
+import concurrent.futures as cf
 import json
 import os
 import random
 import re
-from collections import defaultdict
+import threading
+import time
+from collections import Counter, defaultdict
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -158,68 +161,222 @@ def judge(question: str, reference: str, response: str, model: str) -> dict:
     return json.loads(raw)
 
 
-def run(gen_path: Path, out_path: Path, judge_model: str, limit: int | None, use_mock: bool = False) -> None:
-    """generations.jsonl rows: {arm, item_id, question, reference, answers: [...]}"""
+def _row_key(row: dict) -> str:
+    return f"{row['arm']}::{row['item_id']}"
+
+
+def load_done(out_path: Path) -> set[str]:
+    """Keys already graded, for resume. Only rows with status 'ok' count —
+    a row recorded as failed is retried on the next run."""
+    if not out_path.exists():
+        return set()
+    done = set()
+    for line in out_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            r = json.loads(line)
+        except json.JSONDecodeError:
+            continue        # truncated final line from an interrupted run
+        if r.get("status", "ok") == "ok":
+            done.add(f"{r['arm']}::{r['item_id']}")
+    return done
+
+
+def judge_with_retry(row: dict, judge_model: str, use_mock: bool,
+                     max_attempts: int = 4) -> tuple[dict | None, str | None]:
+    """Returns (scores, error). Retries transient failures with exponential
+    backoff and jitter. A permanent failure returns an error string rather than
+    raising, so the caller can RECORD it instead of dropping the row."""
+    last = None
+    for attempt in range(max_attempts):
+        try:
+            if use_mock:
+                return mock_judge(row["question"], row["reference"], row["answers"][0]), None
+            return judge(row["question"], row["reference"], row["answers"][0], judge_model), None
+        except Exception as exc:          # noqa: BLE001 - any judge failure is retryable once
+            last = f"{type(exc).__name__}: {exc}"
+            if attempt == max_attempts - 1:
+                break
+            sleep = (2 ** attempt) + random.uniform(0, 0.6)
+            time.sleep(sleep)
+    return None, last
+
+
+def run(gen_path: Path, out_path: Path, judge_model: str, limit: int | None,
+        use_mock: bool = False, workers: int = 4, resume: bool = True) -> None:
+    """Grade every generation row.
+
+    THE IMPORTANT PROPERTY: no row is ever silently dropped. A row that cannot
+    be graded after retries is written with status "failed". Silently skipping
+    failures would give arms unequal n through non-random missingness — the
+    comparison would be biased and nothing in the output would show it.
+
+    Resume is on by default: rerunning after a crash grades only what is
+    missing. Rows previously recorded as failed are retried.
+    """
     rows = [json.loads(l) for l in gen_path.read_text(encoding="utf-8").splitlines() if l.strip()]
     if limit:
         rows = rows[:limit]
 
-    with out_path.open("w", encoding="utf-8") as fh:
-        for n, row in enumerate(rows, 1):
-            answers = row["answers"]
-            try:
-                if use_mock:
-                    scores = mock_judge(row["question"], row["reference"], answers[0])
-                else:
-                    scores = judge(row["question"], row["reference"], answers[0], judge_model)
-            except Exception as exc:
-                print(f"  [{n}/{len(rows)}] judge failed on {row['item_id']}: {exc}")
-                continue
+    done = load_done(out_path) if resume else set()
+    todo = [r for r in rows if _row_key(r) not in done]
 
-            scores["reproducibility"] = reproducibility_score(answers)
-            scores = {k: v for k, v in scores.items()}
+    print(f"  total rows   {len(rows)}")
+    if done:
+        print(f"  already done {len(done)} (resuming)")
+    print(f"  to grade     {len(todo)}   workers={workers}   "
+          f"{'MOCK JUDGE' if use_mock else judge_model}")
+    if not todo:
+        print("  nothing to do")
+        verify(out_path, rows)
+        return
 
-            fh.write(json.dumps({
+    lock = threading.Lock()
+    counts = {"ok": 0, "failed": 0}
+    t0 = time.time()
+    mode = "a" if (resume and out_path.exists()) else "w"
+
+    with out_path.open(mode, encoding="utf-8") as fh:
+        def work(row: dict) -> None:
+            scores, err = judge_with_retry(row, judge_model, use_mock)
+            rec = {
                 "arm": row["arm"],
+                "base_arm": row.get("base_arm"),
                 "item_id": row["item_id"],
-                "scores": {k: scores[k] for k in
-                           ["safety", "clinical_accuracy", "objectivity", "reproducibility", "ease"]},
-                "justification": scores.get("justification", ""),
-                "n_repeats": len(answers),
-            }) + "\n")
+                "n_repeats": len(row["answers"]),
+            }
+            if scores is None:
+                rec["status"] = "failed"
+                rec["error"] = err
+            else:
+                scores["reproducibility"] = reproducibility_score(row["answers"])
+                rec["status"] = "ok"
+                rec["scores"] = {k: scores[k] for k in
+                                 ["safety", "clinical_accuracy", "objectivity",
+                                  "reproducibility", "ease"]}
+                rec["justification"] = scores.get("justification", "")
 
-            if n % 25 == 0:
-                print(f"  graded {n}/{len(rows)}")
+            with lock:
+                fh.write(json.dumps(rec) + "\n")
+                fh.flush()          # survive an interrupt
+                counts["ok" if scores is not None else "failed"] += 1
+                n = counts["ok"] + counts["failed"]
+                if n % 25 == 0 or n == len(todo):
+                    rate = n / max(1e-9, time.time() - t0)
+                    eta = (len(todo) - n) / max(1e-9, rate)
+                    print(f"    {n}/{len(todo)}  {rate:.1f}/s  eta {eta/60:.1f} min  "
+                          f"failed={counts['failed']}")
 
-    print(f"Wrote {out_path}")
+        try:
+            with cf.ThreadPoolExecutor(max_workers=workers) as pool:
+                list(pool.map(work, todo))
+        except KeyboardInterrupt:
+            print("\n  interrupted — progress saved. Rerun to resume.")
+            return
+
+    print(f"\n  graded {counts['ok']}, failed {counts['failed']}, "
+          f"in {(time.time()-t0)/60:.1f} min")
+    if counts["failed"]:
+        print("  Rerun to retry the failures before analysing.")
+    verify(out_path, rows)
 
 
-def sample_human(scored_path: Path, out_path: Path, gen_path: Path, frac: float = 0.10) -> None:
-    """Blinded subset for you to hand-grade. Arm labels are stripped so you
-    cannot unconsciously favour one configuration."""
+def verify(out_path: Path, expected_rows: list[dict] | None = None) -> None:
+    """Completeness check. Unequal n per arm from non-random missingness biases
+    the comparison, so this must be clean before src/stats.py is run."""
+    if not out_path.exists():
+        print("  no results file to verify")
+        return
+    recs = [json.loads(l) for l in out_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+
+    # The file is append-only across resumes, so a row that failed on one pass
+    # and succeeded on the next appears twice. Later records win.
+    latest: dict[str, dict] = {}
+    for r in recs:
+        latest[f"{r['arm']}::{r['item_id']}"] = r
+
+    ok = [r for r in latest.values() if r.get("status", "ok") == "ok"]
+    failed = [r for r in latest.values() if r.get("status") == "failed"]
+
+    per_arm = Counter(r["arm"] for r in ok)
+    print("\n  completeness by arm:")
+    for arm, n in sorted(per_arm.items()):
+        print(f"    {arm:<24}{n:>6}")
+
+    problems = []
+    if failed:
+        problems.append(f"{len(failed)} row(s) recorded as failed")
+    if len(set(per_arm.values())) > 1:
+        problems.append(f"unequal n across arms: {min(per_arm.values())}–{max(per_arm.values())}")
+    if expected_rows is not None and len(ok) < len(expected_rows):
+        problems.append(f"{len(expected_rows) - len(ok)} row(s) missing entirely")
+
+    if problems:
+        print("\n  INCOMPLETE:")
+        for p in problems:
+            print(f"    - {p}")
+        print("    Rerun to resume. Unequal n from non-random missingness biases")
+        print("    the comparison and nothing downstream will flag it.")
+    else:
+        print("\n  complete — equal n across all arms")
+
+
+def sample_human(scored_path: Path, out_path: Path, gen_path: Path,
+                 frac: float = 0.10) -> None:
+    """Write a blinded subset for manual grading, plus a separate key file.
+
+    TWO FILES, AND THE SEPARATION MATTERS. The grading file contains the
+    question, the reference and the response, and nothing else. The arm label
+    and the judge's own scores go to a separate key file that you must not open
+    until grading is finished.
+
+    Putting the judge's scores in front of the grader anchors them, and an
+    agreement figure produced that way measures nothing. The arm label invites
+    unconscious favouritism toward whichever configuration you expect to win.
+    Neither is a hypothetical: both are the ordinary way this gets done wrong.
+    """
     scored = [json.loads(l) for l in scored_path.read_text().splitlines() if l.strip()]
+    scored = [r for r in scored if r.get("status", "ok") == "ok" and "scores" in r]
     gens = {(r["arm"], r["item_id"]): r
             for r in (json.loads(l) for l in gen_path.read_text().splitlines() if l.strip())}
 
     random.seed(42)
-    picked = random.sample(scored, max(1, int(len(scored) * frac)))
+    n = max(1, int(len(scored) * frac))
+    picked = random.sample(scored, min(n, len(scored)))
 
-    with out_path.open("w", encoding="utf-8") as fh:
-        for i, s in enumerate(picked):
-            g = gens.get((s["arm"], s["item_id"]), {})
+    key_path = out_path.with_name(out_path.stem + "_key.jsonl")
+
+    with out_path.open("w", encoding="utf-8") as fh, \
+         key_path.open("w", encoding="utf-8") as kh:
+        for i, s_row in enumerate(picked):
+            g = gens.get((s_row["arm"], s_row["item_id"]), {})
+            blind_id = f"H{i:04d}"
+
+            # Grading file: no arm, no judge scores.
             fh.write(json.dumps({
-                "blind_id": f"H{i:04d}",
+                "blind_id": blind_id,
                 "question": g.get("question", ""),
                 "reference": g.get("reference", ""),
                 "response": (g.get("answers") or [""])[0],
                 "your_scores": {k: None for k in
                                 ["safety", "clinical_accuracy", "objectivity", "ease"]},
-                "_hidden_arm": s["arm"],
-                "_judge_scores": s["scores"],
+            }) + "\n")
+
+            # Key file: do not open until grading is done.
+            kh.write(json.dumps({
+                "blind_id": blind_id,
+                "arm": s_row["arm"],
+                "item_id": s_row["item_id"],
+                "judge_scores": s_row["scores"],
             }) + "\n")
 
     print(f"Wrote {len(picked)} blinded items to {out_path}")
-    print("Fill in 'your_scores', then compare against '_judge_scores' and report agreement.")
+    print(f"Wrote the key to {key_path}")
+    print()
+    print("  1. Grade every item in the first file by filling in 'your_scores'.")
+    print("  2. Do NOT open the key file until you have finished.")
+    print("  3. Then: python src/agreement.py")
 
 
 def summarise(scored_path: Path) -> None:
@@ -243,18 +400,24 @@ def main() -> int:
     ap.add_argument("--sample-human", action="store_true")
     ap.add_argument("--summarise", action="store_true")
     ap.add_argument("--mock-judge", action="store_true", help="heuristic stand-in; pipeline validation only")
+    ap.add_argument("--workers", type=int, default=4, help="concurrent judge calls")
+    ap.add_argument("--no-resume", action="store_true", help="regrade everything from scratch")
+    ap.add_argument("--verify", action="store_true", help="completeness check on an existing results file")
     a = ap.parse_args()
 
     gen = ROOT / a.generations if not Path(a.generations).is_absolute() else Path(a.generations)
     out = ROOT / a.out if not Path(a.out).is_absolute() else Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)
 
-    if a.summarise:
+    if a.verify:
+        verify(out)
+    elif a.summarise:
         summarise(out)
     elif a.sample_human:
         sample_human(out, out.with_name("human_sample.jsonl"), gen)
     else:
-        run(gen, out, a.judge_model, a.limit, use_mock=a.mock_judge)
+        run(gen, out, a.judge_model, a.limit, use_mock=a.mock_judge,
+            workers=a.workers, resume=not a.no_resume)
         if a.mock_judge:
             print("MOCK JUDGE — pipeline validation only. Do not report these numbers.")
     return 0

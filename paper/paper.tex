@@ -1,0 +1,300 @@
+% ===========================================================================
+% Offline Health AI-ASSIST — conference paper skeleton
+%
+% Compile:  cd paper && make
+%
+% This uses the standard article class so it compiles anywhere. Switch to your
+% target venue's class (IEEEtran, acmart, llncs) once the venue is chosen —
+% the body text carries over unchanged.
+%
+% HOW TO USE THIS FILE
+%   Every \TODO{...} marks prose you must write.
+%   Every \NUM{...} marks a number that must come from results, never memory.
+%   \input{} table paths point at what src/figures.py actually emits, so a
+%   regenerated results table appears here without editing this file.
+%
+% Run `make check` before submitting: it fails if any \TODO or \NUM remains.
+% ===========================================================================
+
+\documentclass[10pt,twocolumn]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[margin=0.75in]{geometry}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{xcolor}
+\usepackage[colorlinks=true,allcolors=blue]{hyperref}
+\usepackage[numbers,sort&compress]{natbib}
+\usepackage{balance}
+
+\graphicspath{{figures/}{../results/figures/}}
+
+% Drafting markers. Both are stripped by `make final`, and `make check`
+% refuses to build if any survive.
+\newcommand{\TODO}[1]{\textcolor{red}{\textbf{[TODO: #1]}}}
+\newcommand{\NUM}[1]{\textcolor{blue}{\textbf{[#1]}}}
+
+\title{\textbf{Quantization-Aware Fine-Tuning of Sub-Billion-Parameter Language
+Models for an Offline Medication Enquiry Chatbot}}
+
+\author{
+  \TODO{Author} \\
+  \TODO{Institution} \\
+  \texttt{\TODO{email}}
+}
+\date{}
+
+\begin{document}
+\maketitle
+
+% ---------------------------------------------------------------------------
+\begin{abstract}
+\TODO{Write last, after the results are final. Structure in six sentences:
+(1) offline medication information matters where connectivity is unreliable;
+(2) deploying a language model on a low-end handset requires aggressive
+compression, and the effect of compression strategy on medication-safety
+behaviour is unmeasured; (3) we compare N quantization and fine-tuning methods
+across M models below 0.5B parameters, evaluated with a published clinical
+rubric; (4) headline quantitative result; (5) the deterministic safety layer
+and what it contributes; (6) what this implies for deployment. Target 150--200
+words. Do not claim a working clinical tool.}
+\end{abstract}
+
+% ---------------------------------------------------------------------------
+\section{Introduction}
+
+\TODO{Three paragraphs.}
+
+\TODO{P1 --- the problem. Medication information needs: purpose, precautions,
+side effects, interactions, when to seek professional advice. Connectivity in
+much of sub-Saharan Africa is not guaranteed, so a server-dependent assistant
+is unavailable precisely when needed. Cite the equity argument
+\citep{ong2024ethical}.}
+
+\TODO{P2 --- the gap. Lightweight medical chatbots exist
+\citep{elangovan2025medpal,labrak2024biomistral,kim2025meerkat}, but the
+smallest reported models are around 1B parameters and none is deployed to a
+handset. Med-Pal explicitly names quantization strategy and inference
+standardisation as unresolved future work. Below 0.5B, no comparison of
+compression methods against medication-safety behaviour exists.}
+
+\TODO{P3 --- contributions, as a numbered list. Keep each to one line and make
+each verifiable from the results.}
+
+\begin{enumerate}\itemsep2pt
+  \item A controlled comparison of \NUM{n} quantization and fine-tuning
+        strategies for medication-enquiry models below 0.5B parameters,
+        holding dataset, schedule and generation settings fixed.
+  \item The first on-device benchmark of such a model on a \NUM{RAM} handset,
+        reporting size, memory, latency and generation speed.
+  \item A deterministic safety layer that requires no model inference,
+        evaluated against \NUM{n} adversarial probes and \NUM{n} legitimate
+        questions, with cross-implementation parity between the evaluated and
+        deployed guards.
+  \item An analysis of where answer quality and safety fall below usability as
+        model size decreases.
+\end{enumerate}
+
+% ---------------------------------------------------------------------------
+\section{Related Work}
+
+\subsection{Lightweight medical language models}
+\TODO{Med-Pal \citep{elangovan2025medpal}: 1,100 curated pairs, five models at
+7B or below, the SCORE rubric, 71.9\% good-quality answers for the best model.
+State the size gap plainly --- their smallest models scored 39.4\% (1.1B) and
+18.2\% (1.8B), and every model in this study is smaller still. Contrast with
+domain-pretrained alternatives \citep{labrak2024biomistral,kim2025meerkat} and
+note that none is available below 0.5B.}
+
+\subsection{Quantization and parameter-efficient fine-tuning}
+\TODO{Post-training quantization \citep{frantar2023gptq,lin2024awq} against
+quantization-aware training \citep{jacob2018quantization,nagel2021whitepaper}.
+Adapter-based fine-tuning \citep{hu2022lora} and its quantized variant
+\citep{dettmers2023qlora}. Make the distinction that the field routinely
+blurs: QLoRA quantizes a frozen base for memory-efficient \emph{training} and
+is not the same as training against the deployed low-precision representation.}
+
+\subsection{Safety in patient-facing systems}
+\TODO{Guardrail approaches and their compute cost. The argument for a
+deterministic layer at this scale: a sub-billion-parameter model cannot police
+itself, and classifier-based guardrails do not fit alongside it on the target
+device \citep{ong2024ethical}.}
+
+% ---------------------------------------------------------------------------
+\section{Method}
+
+\subsection{Task and scope}
+\TODO{Medication information only. Explicitly out of scope: dosing, diagnosis,
+prescribing. Explain that the reference work treated dosage regimen as an
+answerable domain because a clinical pharmacist authored the answers, whereas
+this system has no clinician in the loop and therefore treats it as a refusal
+domain. This is a deliberate divergence, not an omission.}
+
+\subsection{Data}
+\TODO{Sources and licences. Filtering by a lexicon oriented to the WHO
+Essential Medicines List and regional disease burden. Domain and difficulty
+classification following the five criteria in \citet{elangovan2025medpal}.
+Stratified splits, fixed seed, constructed once. State the refusal proportion
+and justify including refusals in training rather than evaluation alone.
+Report that no reference answer contains a dose and how this is enforced.}
+
+\subsection{Models}
+\TODO{Table of candidates with total and non-embedding parameter counts. State
+which convention is used throughout. Note that Gemma-3-270M is roughly 63\%
+embedding, which makes the mixed-precision arm substantive for that model.}
+
+\subsection{Compression strategies compared}
+\TODO{One short paragraph per arm: half-precision baseline, LoRA, QLoRA,
+8-bit QAT, 4-bit QAT, mixed-precision QAT, and post-training baselines.}
+
+\begin{table}[t]\centering\small
+\caption{Compression strategies compared. All arms share the dataset, splits,
+seed, schedule and generation settings; only the compression method varies.}
+\label{tab:arms}
+\begin{tabular}{ll}
+\toprule
+Arm & Description \\
+\midrule
+\TODO{fill from configs/base.yaml} & \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Matching the simulated and deployed schemes}
+\TODO{This subsection carries the methodological weight of the paper. Explain
+that quantization-aware training only transfers if the simulated scheme matches
+the deployed one, that a mixed k-quant format cannot be reproduced by a uniform
+groupwise simulation, and that the pipeline refuses to export on a mismatch.
+State the deployed format and group size explicitly.}
+
+\subsection{Deterministic safety layer}
+\TODO{Nine input rules, four output rules, no model inference, fails closed,
+returns a rule identifier for every intervention. Describe the priority
+ordering and the conjunctive matching that keeps false positives down.
+Describe the parity mechanism between the evaluated and deployed
+implementations.}
+
+\subsection{Evaluation}
+\TODO{SCORE rubric \citep{elangovan2025medpal}, five domains on a three-point
+scale. Automated grading with a hand-graded subsample and reported agreement.
+Reproducibility measured across repeated generations. Non-parametric analysis:
+Kruskal--Wallis with Dunn's post hoc under Bonferroni correction; paired
+signed-rank test for the guard effect. State the test-set size and why it is
+not smaller.}
+
+% ---------------------------------------------------------------------------
+\section{Results}
+
+\subsection{Answer quality across compression strategies}
+\input{tables/table1_scores.tex}
+
+\TODO{One paragraph. Lead with the finding, not the procedure. Report the
+omnibus test, then only the pairwise comparisons that survive correction.}
+
+\begin{figure}[t]\centering
+  \includegraphics[width=\columnwidth]{fig1_score_box.pdf}
+  \caption{Total SCORE by compression strategy. \TODO{one-line reading}}
+  \label{fig:box}
+\end{figure}
+
+\begin{figure}[t]\centering
+  \includegraphics[width=\columnwidth]{fig2_score_domains.pdf}
+  \caption{Proportion of answers rated highest, by SCORE domain.
+  \TODO{one-line reading}}
+  \label{fig:domains}
+\end{figure}
+
+\subsection{Where quality falls below usability}
+\begin{figure}[t]\centering
+  \includegraphics[width=\columnwidth]{fig3_compression_floor.pdf}
+  \caption{Answer quality against deployed model size. \TODO{one-line reading}}
+  \label{fig:floor}
+\end{figure}
+
+\TODO{The paper's central figure. State the threshold and confirm it was fixed
+in advance --- a threshold chosen after seeing results is not defensible. If
+no configuration reaches it, say so directly; that is a finding, not a failure.}
+
+\subsection{Response consistency}
+\begin{figure}[t]\centering
+  \includegraphics[width=\columnwidth]{fig5_reproducibility.pdf}
+  \caption{Consistency across repeated generations of the same question.
+  \TODO{one-line reading}}
+  \label{fig:repro}
+\end{figure}
+
+\TODO{Novel axis. Reproducibility scored poorly across all models in the
+reference work; whether compression worsens it was unmeasured. For a
+medication assistant, differing answers to the same question about the same
+drug is a safety property, not a stylistic one.}
+
+\subsection{Safety layer}
+\begin{figure}[t]\centering
+  \includegraphics[width=\columnwidth]{figA_guard_rates.pdf}
+  \caption{Left: block rate by adversarial framing. Right: sensitivity on
+  unsafe probes against false-positive rate on legitimate questions.}
+  \label{fig:guard}
+\end{figure}
+
+\TODO{Report block rate AND false-positive rate together. A layer that refuses
+everything achieves a perfect block rate and is useless. Report the unwrapped
+probe result separately, since it shows the payload rules hold without help
+from framing detection. Report the guard effect from the paired test.}
+
+\TODO{Report both defects found during development: under-blocking, where a
+rule set that passed a hand-authored suite blocked only 55\% of a
+systematically generated adversarial set and missed both self-harm probes; and
+over-blocking, where substring matching caused a routine question about a
+repeat prescription to be refused as an attack. The methodological point is
+that a test suite written alongside the rules it tests provides weak evidence.}
+
+\subsection{On-device performance}
+\TODO{Model size, peak resident memory, cold start, time to first token,
+generation speed. Medians over at least five runs with the range, since low-end
+handsets throttle thermally. State the device, chipset and Android version.}
+
+% ---------------------------------------------------------------------------
+\section{Discussion}
+
+\TODO{P1 --- what the comparison shows about compression strategy. Be specific
+about which differences survived correction and which did not.}
+
+\TODO{P2 --- the reframing. Below 0.5B, memory is not the binding constraint;
+every candidate fits comfortably in the available budget. Quality and safety
+bind instead. The question shifts from whether a model can be deployed to
+whether a deployable model can be made safe.}
+
+\TODO{P3 --- the role of the deterministic layer. If fine-tuning alone cannot
+produce reliable refusal at this scale, the safety layer is not an accessory
+but the mechanism by which the system is safe at all. State what that implies
+for anyone deploying a small model in a health context.}
+
+\subsection{Limitations}
+\TODO{Write this properly rather than defensively. Cover: single evaluation
+language; automated grading with a limited human subsample; a templated
+adversarial probe set that is not a substitute for a red team; a single target
+device; no prospective clinical evaluation; and the fact that the training
+corpora under-represent the population the system is argued to serve, which
+matters more than usual given the stated motivation. Reviewers attack the
+limitations you omit and rarely the ones you volunteer.}
+
+% ---------------------------------------------------------------------------
+\section{Conclusion}
+\TODO{Four sentences. What was compared, what was found, what it means for
+deployment, what should follow. Claim nothing the results do not support, and
+do not describe the system as clinically usable.}
+
+% ---------------------------------------------------------------------------
+\section*{Ethics and Data Availability}
+\TODO{Public, non-identifiable data only; no ethics approval required on the
+precedent set in \citet{elangovan2025medpal}. Not a medical device and not
+presented as one. Human referral is architectural. State where code and the
+evaluation set are available.}
+
+\balance
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+\end{document}

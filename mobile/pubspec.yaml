@@ -1,0 +1,32 @@
+name: ohai
+description: Offline Health AI-ASSIST — offline medication enquiry chatbot.
+publish_to: none
+version: 0.1.0
+
+environment:
+  # Floor set by ColorScheme.surfaceContainerHighest (Flutter 3.22 / Dart 3.4).
+  # Declaring it here means `pub get` fails clearly on an old toolchain rather
+  # than the compiler failing later with a confusing error.
+  sdk: '>=3.4.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  sqflite: ^2.3.0          # local history and intervention log, per brief section 7
+  path: ^1.9.0
+  path_provider: ^2.1.0    # model lives in app storage, NOT bundled in the APK
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  test: ^1.25.0
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    # Both GENERATED. Do not edit either by hand.
+    #   rules.json         <- src/safety/rules.json          (mobile/sync_rules.sh)
+    #   model_config.json  <- configs/base.yaml              (mobile/export_config.py)
+    - assets/rules.json
+    - assets/model_config.json

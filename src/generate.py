@@ -120,6 +120,57 @@ def real_generate(model, tok, question: str, system_prompt: str, icfg: dict) -> 
     return tok.decode(out[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True).strip()
 
 
+def real_generate_batch(model, tok, questions: list[str], system_prompt: str,
+                        icfg: dict, n_repeats: int, batch_size: int) -> list[list[str]]:
+    """Batched generation. Returns one list of n_repeats answers per question.
+
+    Batching matters on a quota. One question at a time, a T4 spends most of
+    each step idle; batching fills it. Rough figures for this project: about
+    13 GPU-hours unbatched across the sweep, under 2 batched.
+
+    Decoder-only models must be LEFT-padded for batched generation, or the
+    shorter prompts get padding between the prompt and the generated text and
+    the output degrades. The tokenizer's padding side is set here rather than
+    trusted, because several small models ship with right-padding by default.
+    """
+    import torch
+
+    tok.padding_side = "left"
+    if tok.pad_token is None:
+        tok.pad_token = tok.eos_token
+
+    prompts = [tok.apply_chat_template(
+        [{"role": "system", "content": system_prompt},
+         {"role": "user", "content": q}],
+        tokenize=False, add_generation_prompt=True) for q in questions]
+
+    # Repeat each prompt n_repeats times so every sample is an independent draw.
+    flat = [(qi, p) for qi, p in enumerate(prompts) for _ in range(n_repeats)]
+    out: list[list[str]] = [[] for _ in questions]
+
+    total = len(flat)
+    for start in range(0, total, batch_size):
+        chunk = flat[start:start + batch_size]
+        enc = tok([p for _, p in chunk], return_tensors="pt", padding=True).to(model.device)
+        with torch.no_grad():
+            gen = model.generate(
+                **enc,
+                max_new_tokens=icfg["max_new_tokens"],
+                temperature=icfg["temperature"],
+                do_sample=icfg["do_sample"],
+                top_p=icfg["top_p"],
+                top_k=icfg["top_k"],
+                pad_token_id=tok.pad_token_id,
+            )
+        prompt_len = enc["input_ids"].shape[1]
+        for (qi, _), seq in zip(chunk, gen):
+            out[qi].append(tok.decode(seq[prompt_len:], skip_special_tokens=True).strip())
+        done = min(start + batch_size, total)
+        if done % (batch_size * 5) == 0 or done == total:
+            print(f"    generated {done}/{total}")
+    return out
+
+
 # --------------------------------------------------------------------------- #
 
 def main() -> int:
@@ -132,6 +183,9 @@ def main() -> int:
     ap.add_argument("--mock", action="store_true", help="no model — validate the pipeline")
     ap.add_argument("--arms", default="fp16,lora,qlora4,qat4,ptq4", help="mock mode only")
     ap.add_argument("--append", action="store_true")
+    ap.add_argument("--batch-size", type=int, default=16,
+                    help="generation batch size. 16 suits a 0.5B model on a 16 GB T4; "
+                         "reduce if you hit out-of-memory")
     a = ap.parse_args()
 
     cfg = yaml.safe_load((ROOT / "configs" / "base.yaml").read_text())
@@ -166,27 +220,45 @@ def main() -> int:
     with out_path.open(mode, encoding="utf-8") as fh:
         for arm in arms:
             rng = random.Random(f"{cfg['seed']}:{arm}")
-            for item in items:
+
+            # GENERATE ONCE, THEN APPLY BOTH GUARD CONDITIONS TO THE SAME OUTPUTS.
+            #
+            # The earlier version sampled separately for guard-on and guard-off.
+            # With sampling enabled those are different model outputs, so the
+            # paired test meant to isolate the guard's effect was measuring the
+            # guard PLUS sampling noise — and the pairing was not a true pairing.
+            # It also doubled GPU time, which on a 30-hour weekly quota matters.
+            #
+            # Now the raw outputs are shared. Guard-off shows them as generated;
+            # guard-on passes the same text through the guard. Any difference
+            # between the two conditions is attributable to the guard alone.
+            questions = [item["question"] for item in items]
+            if a.mock:
+                raw_all = [[mock_generate(q, it.get("medication", ""), arm, rng)
+                            for _ in range(n_repeats)]
+                           for q, it in zip(questions, items)]
+            else:
+                raw_all = real_generate_batch(model, tok, questions, cfg["system_prompt"],
+                                              icfg, n_repeats, a.batch_size)
+
+            for item, raws in zip(items, raw_all):
+                pre = guard.check_input(item["question"])
+
                 for gmode in guard_modes:
                     answers, interventions = [], []
-
-                    for _ in range(n_repeats):
-                        if a.mock:
-                            raw = mock_generate(item["question"], item.get("medication", ""), arm, rng)
-                        else:
-                            raw = real_generate(model, tok, item["question"], cfg["system_prompt"], icfg)
-
+                    for raw in raws:
                         if gmode == "on":
-                            pre = guard.check_input(item["question"])
                             if pre.blocked:
+                                # The deployed system never shows the model this
+                                # question. The raw output exists only because
+                                # the same sample serves the unguarded condition.
                                 answers.append(pre.text)
                                 interventions.append({"stage": "input", "rule_id": pre.rule_id})
                                 continue
                             post = guard.check_output(raw)
                             answers.append(post.text)
                             interventions.append(
-                                {"stage": "output", "rule_id": post.rule_id} if post.blocked else {}
-                            )
+                                {"stage": "output", "rule_id": post.rule_id} if post.blocked else {})
                         else:
                             answers.append(raw)
                             interventions.append({})
@@ -203,10 +275,12 @@ def main() -> int:
                         "answers": answers,
                         "interventions": [i for i in interventions if i],
                         "n_repeats": n_repeats,
+                        "shared_raw_outputs": True,
                     }) + "\n")
                     written += 1
 
-            print(f"  {arm}: {len(items)} items x {len(guard_modes)} guard mode(s)")
+            print(f"  {arm}: {len(items)} items x {n_repeats} samples, "
+                  f"shared across {len(guard_modes)} guard condition(s)")
 
     print(f"\nWrote {written} rows to {out_path} in {time.time()-t0:.1f}s")
     if a.mock:

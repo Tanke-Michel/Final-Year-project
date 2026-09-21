@@ -90,11 +90,76 @@ def fleiss_kappa(matrix: np.ndarray) -> float:
     return (p_bar - pe_bar) / (1 - pe_bar) if pe_bar < 1 else 1.0
 
 
+def wilcoxon_paired(rows: list[dict]) -> list[dict]:
+    """Guard on vs off is a PAIRED factor: the same evaluation items are scored
+    twice. Throwing both into one Kruskal-Wallis treats them as independent
+    arms, which inflates the comparison count and destroys power under
+    Bonferroni. A paired signed-rank test on matched item ids is both correct
+    and far more sensitive."""
+    paired: dict[str, dict[str, dict[str, float]]] = defaultdict(lambda: defaultdict(dict))
+    for r in rows:
+        base = r.get("base_arm") or r["arm"].replace("+guard", "")
+        cond = "on" if r["arm"].endswith("+guard") else "off"
+        paired[base][r["item_id"]][cond] = sum(r["scores"][d] for d in SCORE_DOMAINS)
+
+    out = []
+    for base, items in sorted(paired.items()):
+        both = [(v["off"], v["on"]) for v in items.values() if "off" in v and "on" in v]
+        if len(both) < 6:
+            out.append({"arm": base, "n": len(both), "note": "too few pairs to test"})
+            continue
+        off = np.array([b[0] for b in both], dtype=float)
+        on = np.array([b[1] for b in both], dtype=float)
+        if np.all(off == on):
+            out.append({"arm": base, "n": len(both), "delta": 0.0, "p": 1.0, "note": "identical"})
+            continue
+        try:
+            stat, p = stats.wilcoxon(on, off)
+        except ValueError as exc:
+            out.append({"arm": base, "n": len(both), "note": str(exc)})
+            continue
+        out.append({
+            "arm": base, "n": len(both),
+            "median_off": float(np.median(off)), "median_on": float(np.median(on)),
+            "delta": float(np.median(on - off)), "p": float(p),
+        })
+    return out
+
+
 def load(path: Path) -> list[dict]:
-    return [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
+    """Load graded rows, dropping failures and de-duplicating resumed passes.
+
+    score.py writes append-only and records failures explicitly rather than
+    dropping them, so this file can contain a failed record followed by a later
+    successful one for the same row. Taking the last record per key resolves
+    that. Failed records carry no "scores" key, so they must be filtered before
+    anything downstream touches them.
+    """
+    raw = [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
+
+    latest: dict[str, dict] = {}
+    for r in raw:
+        latest[f"{r['arm']}::{r['item_id']}"] = r
+
+    rows = [r for r in latest.values() if r.get("status", "ok") == "ok" and "scores" in r]
+    dropped = len(latest) - len(rows)
+    if dropped:
+        print(f"  NOTE: {dropped} ungraded row(s) excluded. Rerun src/score.py to")
+        print(f"        retry them before reporting — unequal n across arms from")
+        print(f"        non-random missingness biases the comparison.\n")
+    return rows
 
 
-def report(rows: list[dict]) -> None:
+def report(rows: list[dict], guard_filter: str | None = None) -> None:
+    """guard_filter: 'off' | 'on' | None. Compare quantization arms WITHIN one
+    guard condition. Mixing conditions makes the omnibus test uninterpretable."""
+    if guard_filter is not None:
+        want_guard = guard_filter == "on"
+        rows = [r for r in rows if r["arm"].endswith("+guard") == want_guard]
+        if not rows:
+            print(f"No rows with guard={guard_filter}.")
+            return
+
     by_arm: dict[str, list[dict]] = defaultdict(list)
     for r in rows:
         by_arm[r["arm"]].append(r)
@@ -129,6 +194,21 @@ def report(rows: list[dict]) -> None:
     print("KRUSKAL-WALLIS")
     print("=" * 78)
     h, p, df = kruskal_wallis(totals)
+
+    if not np.isfinite(p):
+        # scipy returns NaN when every observation is identical: there is no
+        # variance to partition. Printing "p = nan" looks like a bug; it is a
+        # real and interpretable outcome, and at sub-billion-parameter scale a
+        # degenerate model scoring identically everywhere is entirely possible.
+        print("  p = undefined (no variance)")
+        print()
+        print("  Every arm produced identical total scores, so there is nothing")
+        print("  for the test to distinguish. Check the raw generations before")
+        print("  concluding anything: this usually means the model is emitting")
+        print("  the same output regardless of input, or the judge is failing")
+        print("  and defaulting to a constant score.")
+        return
+
     print(f"  H = {h:.3f}   df = {df}   p = {p:.6f}")
     print(f"  {'Significant difference between arms.' if p < 0.05 else 'No significant difference between arms.'}")
 
@@ -136,6 +216,18 @@ def report(rows: list[dict]) -> None:
         print("\n  Omnibus test not significant — post hoc comparisons are not")
         print("  interpretable. Report this honestly rather than cherry-picking pairs.")
         return
+
+    n_arms = len(totals)
+    n_comp = n_arms * (n_arms - 1) // 2
+    min_n = min(len(v) for v in totals.values())
+    if n_comp > 15 or min_n < 30:
+        print()
+        print("  ** POWER WARNING **")
+        print(f"     {n_arms} arms -> {n_comp} pairwise comparisons; smallest group n = {min_n}.")
+        print("     Bonferroni multiplies every p-value by the comparison count, so with")
+        print("     many arms or few items almost nothing reaches significance. Reduce the")
+        print("     arms compared at once, or enlarge the evaluation set. Med-Pal used 231")
+        print("     validation items; aim for at least 120.")
 
     print()
     print("=" * 78)
@@ -177,9 +269,47 @@ def _self_test() -> None:
     print("  only slight agreement. Cite that when defending your own method.")
 
 
+def full_report(rows: list[dict]) -> None:
+    has_guard = any(r["arm"].endswith("+guard") for r in rows)
+
+    if not has_guard:
+        report(rows)
+        return
+
+    print("#" * 78)
+    print("# QUANTIZATION ARMS — GUARD OFF (raw model behaviour)")
+    print("#" * 78)
+    report(rows, guard_filter="off")
+
+    print()
+    print("#" * 78)
+    print("# QUANTIZATION ARMS — GUARD ON (deployed system behaviour)")
+    print("#" * 78)
+    report(rows, guard_filter="on")
+
+    print()
+    print("#" * 78)
+    print("# GUARD EFFECT — Wilcoxon signed-rank, paired on item id")
+    print("#" * 78)
+    print(f"{'arm':<16}{'n':>5}{'med off':>10}{'med on':>10}{'delta':>9}{'p':>12}{'sig':>6}")
+    print("-" * 78)
+    for w in wilcoxon_paired(rows):
+        if "p" not in w:
+            print(f"{w['arm']:<16}{w['n']:>5}   {w.get('note','')}")
+            continue
+        sig = "  *" if w["p"] < 0.05 else "   "
+        print(f"{w['arm']:<16}{w['n']:>5}{w['median_off']:>10.1f}{w['median_on']:>10.1f}"
+              f"{w['delta']:>9.1f}{w['p']:>12.5f}{sig:>6}")
+    print()
+    print("  The delta column is what the safety layer contributes on top of the")
+    print("  model. Report it separately from the quantization comparison — it")
+    print("  answers a different question and a jury will ask which component")
+    print("  is doing the work.")
+
+
 if __name__ == "__main__":
     if len(sys.argv) > 1:
-        report(load(Path(sys.argv[1])))
+        full_report(load(Path(sys.argv[1])))
     else:
         print("No results file given — running self-test on synthetic data.\n")
         _self_test()

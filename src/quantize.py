@@ -81,12 +81,36 @@ def verify_scheme_match(method: str, target: str, qcfg: dict) -> bool:
         print(f"  {method} is not a QAT arm — no simulation to match. OK.")
         return True
 
+    # A mixed k-quant is not a scheme mismatch you can fix by editing a config.
+    # GGUF k-quants ARE mixed precision, but with an internal policy chosen by
+    # llama.cpp that you do not control, so no QAT simulation can reproduce it.
+    # This is a structural incompatibility and it has to be designed around.
+    if scheme["mixed"] and method.startswith("qat"):
+        print("  STRUCTURAL INCOMPATIBILITY")
+        print()
+        print(f"  {target} is a mixed k-quant. Its per-block precision policy is")
+        print("  chosen internally by llama.cpp, so a quantization-aware training")
+        print("  run cannot simulate the representation it will actually be")
+        print("  deployed in. No configuration change fixes this.")
+        print()
+        print("  Three options, in order of cost:")
+        print("    1. Deploy this arm as q4_0 and hold the higher-precision")
+        print("       modules out of the comparison. Honest and cheap, but the")
+        print("       arm no longer tests what its name suggests.")
+        print("    2. Report it as a TRAINING-ONLY arm, with the deployment gap")
+        print("       stated. Valid, and the gap is itself worth reporting.")
+        print("    3. Deploy via ExecuTorch, which expresses per-module precision")
+        print("       directly. Correct, but it is a different mobile pipeline")
+        print("       and a day you may not have.")
+        print()
+        print("  Whichever you choose, say so in the methodology. Silently")
+        print("  exporting to q4_k_m and calling it mixed-precision QAT would")
+        print("  be claiming something the artefact does not support.")
+        return False
+
     problems = []
     if scheme["bits"] != qcfg["bits"]:
         problems.append(f"bit width {scheme['bits']} != configured {qcfg['bits']}")
-    if scheme["mixed"]:
-        problems.append(f"{target} is a mixed k-quant; a uniform groupwise QAT "
-                        f"simulation cannot reproduce its block structure")
     if scheme["group_size"] is not None and scheme["group_size"] != qcfg["group_size"]:
         problems.append(f"group size {scheme['group_size']} != configured {qcfg['group_size']}")
     if scheme["symmetric"] != qcfg["symmetric"]:
@@ -171,6 +195,11 @@ def main() -> int:
     ap.add_argument("--llama-cpp", default="~/llama.cpp")
     ap.add_argument("--targets", default="q4_0,q8_0", help="also add q4_k_m to report both")
     ap.add_argument("--verify-only", action="store_true", help="scheme check only, no export")
+    ap.add_argument("--target", default=None,
+                    help="deployment format for THIS arm. Defaults to the scheme the "
+                         "arm's training method simulated, which is what makes its QAT "
+                         "result meaningful. configs/base.yaml sets the format the app "
+                         "actually ships, which only has to match the winning arm.")
     a = ap.parse_args()
 
     run_dir = Path(a.run) if Path(a.run).is_absolute() else ROOT / a.run
@@ -180,7 +209,19 @@ def main() -> int:
     meta_path = run_dir / "run_meta.json"
     method = json.loads(meta_path.read_text())["method"] if meta_path.exists() else "unknown"
 
-    ok = verify_scheme_match(method, qcfg["target_format"], qcfg)
+    # Per-arm target. A single global format cannot be right for every arm:
+    # qat8 simulates q8_0, qat4 simulates q4_0, qat_mixed simulates q4_k_m.
+    # Comparing an arm against a scheme it did not simulate measures nothing.
+    target = a.target or METHOD_EXPECTS.get(method) or qcfg["target_format"]
+    arm_qcfg = dict(qcfg)
+    scheme = GGUF_SCHEMES.get(target.replace("gguf_", "").lower())
+    if scheme and method.startswith("qat"):
+        arm_qcfg["bits"] = scheme["bits"]
+        if scheme["group_size"]:
+            arm_qcfg["group_size"] = scheme["group_size"]
+        arm_qcfg["symmetric"] = scheme["symmetric"]
+
+    ok = verify_scheme_match(method, target, arm_qcfg)
     if not ok and not a.verify_only:
         raise SystemExit("\nRefusing to export on a scheme mismatch. Fix the config first.")
     if a.verify_only:
@@ -193,6 +234,9 @@ def main() -> int:
     model_dir = merge_adapters(run_dir)
     llama_cpp = Path(a.llama_cpp).expanduser()
     targets = [t.strip() for t in a.targets.split(",") if t.strip()]
+    tgt = target.replace("gguf_", "").lower()
+    if tgt not in targets:
+        targets.insert(0, tgt)
     sizes = export(model_dir, run_dir / "gguf", llama_cpp, targets)
 
     print()
