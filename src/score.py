@@ -395,7 +395,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--generations", default="results/generations.jsonl")
     ap.add_argument("--out", default="results/score_results.jsonl")
-    ap.add_argument("--judge-model", default="claude-sonnet-4-6")
+    ap.add_argument("--judge-model", default="claude-sonnet-5",
+                    help="grading model. Record the exact name in the thesis.")
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--sample-human", action="store_true")
     ap.add_argument("--summarise", action="store_true")

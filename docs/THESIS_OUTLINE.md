@@ -53,6 +53,10 @@ substance and cite it precisely.
 | 3.7 Evaluation | SCORE, judging protocol, human subsample, statistical plan | 200 |
 
 **Must appear:**
+- That every configuration is scored in its deployed, quantized form, using
+  one quantizer shared by training, evaluation and export — and how it was
+  verified against llama.cpp. This is what makes the quality numbers mean
+  "quality on the phone".
 - The divergence from Med-Pal on `dosage_regimen`, framed as a considered
   decision for a system with no clinician in the loop.
 - Why refusals are in the training set, not only in evaluation.

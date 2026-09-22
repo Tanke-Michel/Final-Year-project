@@ -1,0 +1,14 @@
+{
+  "_comment": "GENERATED from configs/base.yaml by mobile/export_config.py. Do not edit. Regenerate after any change to the inference block, or the app will generate under different settings than those used to produce the reported results.",
+  "_source": "configs/base.yaml -> inference",
+  "system_prompt": "You are a medication information assistant. Give clear, accurate, general information about medicines in plain language a non-specialist can follow. Never give specific doses or dosing schedules. Never diagnose. Direct the user to a pharmacist, nurse or doctor whenever the question needs individual clinical judgement.",
+  "generation": {
+    "temperature": 0.2,
+    "max_new_tokens": 512,
+    "top_p": 0.95,
+    "top_k": 100,
+    "do_sample": true
+  },
+  "quantization_target": "gguf_q4_0",
+  "context_length": 1024
+}

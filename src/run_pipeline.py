@@ -74,7 +74,8 @@ def save_state(st: dict) -> None:
     STATE.write_text(json.dumps(st, indent=2))
 
 
-def build_plan(cfg_models: dict, mock: bool, eval_set: str) -> list[Stage]:
+def build_plan(cfg_models: dict, mock: bool, eval_set: str,
+               with_export: bool = False) -> list[Stage]:
     stages: list[Stage] = []
     arms_by_model: list[tuple[str, list[str]]] = []
 
@@ -117,43 +118,61 @@ def build_plan(cfg_models: dict, mock: bool, eval_set: str) -> list[Stage]:
                 tags=["train"],
             ))
 
-    # --- quantize + scheme check ---
+    # --- evaluation plan: what gets scored, in which form ---
+    #
+    # Every arm is scored in the form the phone would run it (src/quant_sim.py):
+    # qat8 -> q8_0, qat_mixed -> mixed, everything else -> q4_0. The fp16 arm is
+    # scored twice:
+    #   fp16@none  unquantized — the upper bound
+    #   fp16@q4_0  the same model rounded to Q4_0 with no training awareness —
+    #              the post-training quantization baseline. It is llama.cpp's own
+    #              round-to-nearest, i.e. the PTQ that this runtime actually
+    #              supports. GPTQ and AWQ produce formats llama.cpp does not load
+    #              as Q4_0, so they are not a like-for-like baseline here.
+    # The headline comparison is then qat4@q4_0 against fp16@q4_0 and lora@q4_0:
+    # same deployed format, with and without quantization-aware training.
+    sys.path.insert(0, str(ROOT / "src"))
+    from deploy_specs import deploy_spec_for_arm
+
+    evals: list[tuple[str, str, str]] = []          # (model key, arm, deploy spec)
     for key, arms in arms_by_model:
         for arm in arms:
-            if not arm.startswith("qat"):
-                continue
-            # qat_mixed has no clean GGUF deployment target: k-quants are mixed
-            # precision with an internal policy that no QAT run can simulate.
-            # Marked optional so the sweep continues; the decision about how to
-            # handle the arm belongs in the methodology, not in a retry.
-            mixed = arm == "qat_mixed"
-            stages.append(Stage(
-                key=f"quantize:{key}:{arm}",
-                desc=f"export {key} [{arm}] (target matched to what it simulated)",
-                cmd=[sys.executable, "src/quantize.py", "--run", f"runs/{key}_{arm}"]
-                    + (["--verify-only"] if mock else []),
-                optional=mock or mixed,
-                tags=["quantize"],
-            ))
+            if arm == "fp16":
+                evals.append((key, arm, "none"))
+            evals.append((key, arm, deploy_spec_for_arm(arm)))
+
+    # --- GGUF export: optional, and not part of the GPU sweep ---
+    # Quality is scored from exactly simulated deployment, so the sweep no longer
+    # needs llama.cpp. Export is only for the configurations that go on the
+    # phone for the Day 13 benchmark: run src/quantize.py for those, on a CPU
+    # session or your own machine. --with-export adds it here.
+    if with_export:
+        for key, arms in arms_by_model:
+            for arm in arms:
+                stages.append(Stage(
+                    key=f"quantize:{key}:{arm}",
+                    desc=f"export {key} [{arm}] as {deploy_spec_for_arm(arm)} GGUF",
+                    cmd=[sys.executable, "src/quantize.py", "--run", f"runs/{key}_{arm}"]
+                        + (["--verify-only"] if mock else []),
+                    optional=mock, tags=["quantize"],
+                ))
 
     # --- generate ---
-    gen_out = ROOT / "results" / "generations.jsonl"
-    for i, (key, arms) in enumerate(arms_by_model):
-        for j, arm in enumerate(arms):
-            first = (i == 0 and j == 0)
-            cmd = [sys.executable, "src/generate.py", "--eval", eval_set,
-                   "--out", "results/generations.jsonl", "--guard", "both"]
-            if mock:
-                cmd += ["--mock", "--arms", f"{key}-{arm}"]
-            else:
-                cmd += ["--run", f"runs/{key}_{arm}", "--arm", f"{key}-{arm}"]
-            if not first:
-                cmd.append("--append")
-            stages.append(Stage(
-                key=f"generate:{key}:{arm}",
-                desc=f"generate answers for {key} [{arm}]",
-                cmd=cmd, tags=["generate"],
-            ))
+    for n, (key, arm, spec) in enumerate(evals):
+        label = f"{key}-{arm}@{spec}"
+        cmd = [sys.executable, "src/generate.py", "--eval", eval_set,
+               "--out", "results/generations.jsonl", "--guard", "both"]
+        if mock:
+            cmd += ["--mock", "--arms", label]
+        else:
+            cmd += ["--run", f"runs/{key}_{arm}", "--arm", label, "--deploy", spec]
+        if n > 0:
+            cmd.append("--append")
+        stages.append(Stage(
+            key=f"generate:{label}",
+            desc=f"score {key} [{arm}] as deployed ({spec})",
+            cmd=cmd, tags=["generate"],
+        ))
 
     # --- grade, verify, analyse ---
     stages += [
@@ -230,6 +249,12 @@ def main() -> int:
     ap.add_argument("--only", help="run one phase: train | quantize | generate | analyse")
     ap.add_argument("--force", help="rerun one stage by key, e.g. train:qwen05:qat4")
     ap.add_argument("--eval", default="data/test.jsonl")
+    ap.add_argument("--budget-hours", type=float, default=None,
+                    help="stop starting new stages after this long, and exit cleanly. "
+                         "On Kaggle, a session killed by the time limit may not save "
+                         "its outputs; stopping early guarantees the commit completes.")
+    ap.add_argument("--with-export", action="store_true",
+                    help="also export GGUF files (needs llama.cpp built; not on Kaggle GPU)")
     ap.add_argument("--stop-on-fail", action="store_true",
                     help="halt on the first failure instead of continuing")
     a = ap.parse_args()
@@ -239,7 +264,7 @@ def main() -> int:
     if eval_set != a.eval:
         print(f"NOTE: {a.eval} not found, using {eval_set}\n")
 
-    stages = build_plan(models, a.mock, eval_set)
+    stages = build_plan(models, a.mock, eval_set, a.with_export)
     st = load_state()
 
     if a.force:
@@ -285,7 +310,13 @@ def main() -> int:
 
     t0 = time.time()
     failures = []
+    budget_hit = False
     for s in todo:
+        if a.budget_hours and (time.time() - t0) / 3600 > a.budget_hours:
+            budget_hit = True
+            print(f"\n  time budget of {a.budget_hours} h reached — stopping cleanly so the")
+            print("  session's outputs are saved. Commit again to continue from here.")
+            break
         if not run_stage(s, st, a.mock):
             failures.append(s.key)
             save_state(st)

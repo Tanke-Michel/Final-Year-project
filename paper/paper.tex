@@ -162,12 +162,21 @@ Arm & Description \\
 \end{tabular}
 \end{table}
 
-\subsection{Matching the simulated and deployed schemes}
-\TODO{This subsection carries the methodological weight of the paper. Explain
-that quantization-aware training only transfers if the simulated scheme matches
-the deployed one, that a mixed k-quant format cannot be reproduced by a uniform
-groupwise simulation, and that the pipeline refuses to export on a mismatch.
-State the deployed format and group size explicitly.}
+\subsection{One quantizer for training, evaluation and deployment}
+\TODO{This subsection carries the methodological weight of the paper. Three
+points. (1) Quantization-aware training only transfers if the simulated
+rounding matches the deployed rounding; GGUF Q4\_0 is not textbook symmetric
+int4 --- the largest-magnitude value in each block of 32 keeps its sign and
+maps to $-8$, so the step is $\max/8$ --- and a generic int4 fake quantizer
+trains against a different grid. (2) A single reimplementation of llama.cpp's
+Q4\_0/Q8\_0 arithmetic is therefore used for the straight-through-estimator
+fake quantization during training, for rounding the weights before every
+evaluation, and to specify the exported file; it is verified bit-identical
+against the ggml C reference and against llama.cpp's own gguf-py
+(\NUM{458,752} values, zero differences). (3) Every configuration is scored
+in its deployed form, never in fp16, so the reported quality is the quality of
+the model on the phone. State the one simplification: runtime 8-bit
+activation rounding inside llama.cpp's matrix multiplies is not simulated.}
 
 \subsection{Deterministic safety layer}
 \TODO{Nine input rules, four output rules, no model inference, fails closed,

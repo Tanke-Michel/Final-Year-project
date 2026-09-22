@@ -33,12 +33,14 @@ from __future__ import annotations
 
 import json
 import re
-import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 DEFAULT_RULES = Path(__file__).with_name("rules.json")
+
+with open(DEFAULT_RULES, encoding="utf-8") as _fh:
+    _TABLES = json.load(_fh).get("normalisation", {})
 
 
 @dataclass
@@ -62,21 +64,33 @@ class GuardResult:
         }
 
 
-def normalise(text: str) -> str:
-    """Lowercase, strip accents, collapse whitespace, and neutralise the most
-    common obfuscations. Users type messily; so do people probing the guard."""
-    text = unicodedata.normalize("NFKD", text)
-    text = "".join(c for c in text if not unicodedata.combining(c))
+def normalise(text: str, tables: dict | None = None) -> str:
+    """Lowercase, fold accents, undo leetspeak, collapse separators, rejoin
+    letter-spaced words.
+
+    The tables live in rules.json rather than in code so that the Dart port on
+    Android performs byte-identical preprocessing. Dart has no core NFKD
+    equivalent, so an explicit fold map is the only way to guarantee the two
+    implementations agree. If they diverge, the guard you ship is not the guard
+    you measured.
+
+    Accent folding is not cosmetic here: francophone users type "problème",
+    "après", "à jeun", and none of that matches without it."""
+    t = tables or _TABLES
     text = text.lower()
-    # Common leetspeak substitutions seen in jailbreak probes.
-    for src, dst in (("0", "o"), ("1", "i"), ("3", "e"), ("4", "a"), ("$", "s"), ("@", "a")):
+
+    if t.get("fold_map"):
+        text = "".join(t["fold_map"].get(c, c) for c in text)
+    for src, dst in t.get("leet_map", {}).items():
         text = text.replace(src, dst)
-    # Separators inserted between letters to defeat substring matching.
-    text = re.sub(r"[_\-*.]+", " ", text)
+
+    seps = t.get("separator_chars", "_-*.")
+    text = re.sub(f"[{re.escape(seps)}]+", " ", text)
     text = re.sub(r"\s+", " ", text)
-    # Re-join letter-spaced words: "l e t h a l" -> "lethal". Runs of three or
-    # more single characters are almost never natural text, so this is safe.
-    text = re.sub(r"\b(?:\w ){2,}\w\b", lambda m: m.group(0).replace(" ", ""), text)
+
+    n = t.get("rejoin_min_run", 3)
+    text = re.sub(rf"\b(?:\w ){{{n - 1},}}\w\b",
+                  lambda m: m.group(0).replace(" ", ""), text)
     return text.strip()
 
 
@@ -85,14 +99,21 @@ class Guard:
         with open(rules_path, encoding="utf-8") as fh:
             self.rules = json.load(fh)
 
+        self.tables: dict = self.rules.get("normalisation", {})
         self.responses: dict[str, str] = self.rules["responses"]
         self.disclaimer: str = self.rules["disclaimer"]
 
-        # Input rules sorted by priority: self-harm and lethality are checked
-        # before anything else, so an ambiguous query resolves to the safest
+        # Sorted by (priority, id). Self-harm and lethality are checked before
+        # anything else, so an ambiguous query resolves to the safest
         # interpretation rather than the first lexical match.
+        #
+        # The tie-break on id is not cosmetic: Python's sort is stable but
+        # Dart's List.sort is not, so rules sharing a priority could evaluate in
+        # a different order on device. Sorting on a total key makes the two
+        # implementations provably identical.
         self.input_rules = sorted(
-            self.rules["input_rules"], key=lambda r: r.get("priority", 99)
+            self.rules["input_rules"],
+            key=lambda r: (r.get("priority", 99), r["id"]),
         )
 
         self.output_rules = self.rules["output_rules"]
@@ -107,7 +128,7 @@ class Guard:
     def check_input(self, text: str) -> GuardResult:
         """Run before generation. If blocked is True the model must not run."""
         try:
-            probe = normalise(text)
+            probe = normalise(text, self.tables)
 
             for rule in self.input_rules:
                 # any_of holds phrases that are unambiguous on their own and so

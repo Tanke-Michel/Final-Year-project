@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import '../controllers/chat_controller.dart';
+import '../services/llm_service.dart';
+import 'benchmark_screen.dart';
 import '../widgets/message_bubble.dart';
 import '../widgets/status_banner.dart';
 
@@ -83,6 +85,15 @@ class _ChatScreenState extends State<ChatScreen> {
             icon: const Icon(Icons.shield_outlined),
             tooltip: 'Safety interventions',
             onPressed: _showInterventions,
+          ),
+          IconButton(
+            icon: const Icon(Icons.speed),
+            tooltip: 'Benchmark (Day 13)',
+            onPressed: c.busy
+                ? null
+                : () => Navigator.of(context).push(MaterialPageRoute<void>(
+                      builder: (_) => BenchmarkScreen(llm: c.llm),
+                    )),
           ),
           IconButton(
             icon: const Icon(Icons.delete_outline),

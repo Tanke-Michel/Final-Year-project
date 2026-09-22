@@ -1,9 +1,33 @@
-pyyaml
-torch
-transformers
-peft
-accelerate
-datasets
-scipy
-scikit-learn
-statsmodels
+# Core training. Tested versions — the Kaggle notebooks pin exactly these, and
+# scripts/cpu_rehearsal.py ran every arm with them:
+#   torch 2.10.0, transformers 5.17.0, trl 1.13.0, peft 0.19.1, accelerate 1.13.0
+torch>=2.4
+transformers==5.17.0
+trl==1.13.0
+peft==0.19.1
+datasets>=3.0
+accelerate==1.13.0
+bitsandbytes>=0.44          # qlora4 arm, CUDA only
+safetensors>=0.4
+# No torchao: quantization-aware training uses src/quant_sim.py, an exact
+# reimplementation of llama.cpp's Q4_0/Q8_0 arithmetic.
+
+# Evaluation
+numpy>=1.26
+scipy>=1.13                 # Kruskal-Wallis
+pyyaml>=6.0
+anthropic>=0.40             # or openai — judge is model-agnostic
+
+# Quantization / export (only for the configurations benchmarked on the phone)
+# llama.cpp is cloned and built separately, not pip-installed:
+#   git clone https://github.com/ggml-org/llama.cpp
+# gguf reads the exported file back to verify every tensor's type, and is the
+# second reference that src/test_quant_sim.py checks the quantizer against.
+gguf>=0.10
+
+# --- optional, for validating the hand-written statistics only ---
+# Not needed to run the project. Install these to run src/test_stats.py, which
+# cross-checks Dunn's test and Cohen's kappa against reference implementations.
+#   pip install scikit-learn scikit-posthocs
+# scikit-learn>=1.4
+# scikit-posthocs>=0.9

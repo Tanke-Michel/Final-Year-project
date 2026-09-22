@@ -40,6 +40,11 @@ class ChatController extends ChangeNotifier {
   String get backendName => _llm.backendName;
   String? get modelError => _llm.lastError;
 
+  /// Exposed ONLY for the Day 13 benchmark screen, which measures raw inference
+  /// cost. Conversation must continue to go through [send], which routes every
+  /// turn through the guard. Do not call generate() from anywhere else.
+  LlmService get llm => _llm;
+
   Future<void> init() async {
     await _db.open();
     await _llm.load();

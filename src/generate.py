@@ -82,17 +82,62 @@ def mock_generate(question: str, med: str, arm: str, rng: random.Random) -> str:
 # Real backend
 # --------------------------------------------------------------------------- #
 
-def load_model(run_dir: Path):
+def load_model(run_dir: Path, deploy: str = "q4_0"):
+    """Load a trained checkpoint IN THE FORM THE PHONE WILL RUN IT.
+
+    This is the step that makes the evaluation measure the research question.
+    The earlier version scored the full-precision checkpoint, never the
+    quantized one, so every arm was compared in fp16 — and the whole point of
+    quantization-aware training only shows up after quantization. Now:
+
+      1. adapter checkpoints (lora, qlora4) are merged into the base, exactly
+         as src/quantize.py merges them before export;
+      2. the weights are loaded in fp16, matching the f16 GGUF that
+         llama-quantize starts from;
+      3. every weight is rounded with llama.cpp's own arithmetic under the
+         arm's deployment spec (src/quant_sim.py).
+
+    deploy="none" skips step 3, for the unquantized upper bound.
+    """
+    import json as _json
+
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    sys.path.insert(0, str(ROOT / "src"))
+    from quant_sim import simulate_deployment
 
     ckpt = run_dir / "final"
     if not ckpt.exists():
         raise SystemExit(f"No checkpoint at {ckpt}. Train it first.")
 
+    on_gpu = torch.cuda.is_available()
+    bf16 = on_gpu and torch.cuda.get_device_capability(0)[0] >= 8
+    # bf16 only where it runs in hardware; is_bf16_supported() says True on a
+    # T4 because bf16 can be emulated, slowly.
+    dtype = torch.bfloat16 if bf16 else (torch.float16 if on_gpu else torch.float32)
+    where = {"": 0} if on_gpu else None
+
     tok = AutoTokenizer.from_pretrained(ckpt)
-    dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-    model = AutoModelForCausalLM.from_pretrained(ckpt, torch_dtype=dtype, device_map="auto")
+    adapter_cfg = ckpt / "adapter_config.json"
+    if adapter_cfg.exists():
+        from peft import PeftModel
+        base_id = _json.loads(adapter_cfg.read_text())["base_model_name_or_path"]
+        base = AutoModelForCausalLM.from_pretrained(base_id, dtype=dtype, device_map=where)
+        model = PeftModel.from_pretrained(base, str(ckpt)).merge_and_unload()
+        print(f"  merged adapter into {base_id}")
+    else:
+        model = AutoModelForCausalLM.from_pretrained(ckpt, dtype=dtype, device_map=where)
+
+    counts = simulate_deployment(model, deploy)
+    if deploy == "none":
+        print("  evaluating UNQUANTIZED weights (upper bound)")
+    else:
+        print(f"  simulated deployment {deploy}: " +
+              ", ".join(f"{n} tensors at {f}" for f, n in sorted(counts.items())))
+        if not counts:
+            raise SystemExit(f"Deployment spec {deploy} quantized nothing — refusing to "
+                             "report unquantized results under a quantized label.")
     model.eval()
     return model, tok
 
@@ -186,6 +231,9 @@ def main() -> int:
     ap.add_argument("--batch-size", type=int, default=16,
                     help="generation batch size. 16 suits a 0.5B model on a 16 GB T4; "
                          "reduce if you hit out-of-memory")
+    ap.add_argument("--deploy", default="q4_0", choices=["none", "q4_0", "q8_0", "mixed"],
+                    help="deployment spec to simulate before generating. Scores the "
+                         "model the phone will run. 'none' = unquantized upper bound.")
     a = ap.parse_args()
 
     cfg = yaml.safe_load((ROOT / "configs" / "base.yaml").read_text())
@@ -210,8 +258,8 @@ def main() -> int:
         if not a.run:
             raise SystemExit("--run is required unless --mock is set")
         run_dir = Path(a.run) if Path(a.run).is_absolute() else ROOT / a.run
-        arms = [a.arm or run_dir.name]
-        model, tok = load_model(run_dir)
+        arms = [a.arm or f"{run_dir.name}@{a.deploy}"]
+        model, tok = load_model(run_dir, a.deploy)
 
     mode = "a" if a.append else "w"
     written = 0

@@ -1,45 +1,71 @@
-# Paper build.
-#
-#   make          compile the draft, with TODO/NUM markers visible
-#   make sync     pull the latest generated tables and figures from results/
-#   make check    fail if any TODO or NUM marker remains
-#   make clean
+# Entry point. Use this rather than invoking the scripts directly — execute
+# permissions do not survive a zip, a file copy or some checkouts, so
+# `./run_smoke_test.sh` fails on a fresh copy with "Permission denied".
 
-PAPER = paper
-RESULTS = ../results/figures
+.PHONY: help setup verify test guard stats-check quant-check rehearse-cpu plan status rehearse sweep clean-results paper check-mock
 
-all: sync
-	pdflatex -interaction=nonstopmode $(PAPER).tex >/dev/null || true
-	-bibtex $(PAPER) >/dev/null 2>&1
-	pdflatex -interaction=nonstopmode $(PAPER).tex >/dev/null || true
-	pdflatex -interaction=nonstopmode $(PAPER).tex | tail -20
-	@echo "built $(PAPER).pdf"
+help:
+	@echo "make setup          install dependencies and restore execute bits"
+	@echo "make verify         is this copy complete? (run first on any new copy)"
+	@echo "make test           full smoke test (~20s, no GPU/API/device needed)"
+	@echo "make quant-check    exact llama.cpp quantizer tests (needs torch)"
+	@echo "make rehearse-cpu   REAL training + evaluation code on a tiny model (needs torch)"
+	@echo ""
+	@echo "make plan           show the experiment sweep, run nothing"
+	@echo "make rehearse       run the whole sweep on mock data (~10s)"
+	@echo "make sweep          RUN THE REAL SWEEP (resumable)"
+	@echo "make status         what is done, what is pending"
+	@echo ""
+	@echo "make guard          safety guard tests only (no dependencies at all)"
+	@echo "make stats-check    validate Dunn's test and the kappas"
+	@echo "make paper          build the conference paper"
+	@echo "make check-mock     fail if any mock figure is present in results/"
+	@echo "make clean-results  delete generated results and figures"
 
-# Tables and figures are GENERATED. Never edit them here — regenerate with
-# src/figures.py and re-run this, or the paper will drift from the results.
-sync:
-	@mkdir -p tables figures
-	@if [ -f $(RESULTS)/table1_scores.tex ]; then \
-	  cp $(RESULTS)/table1_scores.tex tables/; echo "synced table1_scores.tex"; \
-	else \
-	  echo "WARNING: no table1_scores.tex yet — run src/figures.py first"; \
-	  printf '%%%% placeholder until src/figures.py has been run\n\\begin{table}[t]\\centering\n\\caption{SCORE by arm.}\\label{tab:scores}\n\\begin{tabular}{l}\\toprule Pending results \\\\ \\bottomrule\\end{tabular}\n\\end{table}\n' > tables/table1_scores.tex; \
-	fi
-	@cp $(RESULTS)/*.pdf figures/ 2>/dev/null && echo "synced figures" || echo "WARNING: no figures yet"
+setup:
+	@chmod +x run_smoke_test.sh mobile/sync_rules.sh 2>/dev/null || true
+	pip install -r requirements.txt
+	@echo "\nReady. Now run: make test"
 
-check:
-	@n=$$(grep -v '^\s*%' $(PAPER).tex | grep -c '\\TODO{\|\\NUM{' || true); \
-	if [ "$$n" -gt 0 ]; then \
-	  echo "FAIL: $$n drafting marker(s) remain in $(PAPER).tex"; \
-	  grep -n '\\TODO{\|\\NUM{' $(PAPER).tex | grep -v ':\s*%' | head -20; \
-	  exit 1; \
-	else echo "PASS: no drafting markers remain"; fi
-	@n=$$(grep -c 'TODO-VERIFY' references.bib || true); \
-	if [ "$$n" -gt 0 ]; then \
-	  echo "FAIL: $$n unverified bibliography entr(ies)"; exit 1; \
-	else echo "PASS: bibliography verified"; fi
+verify:
+	@python3 scripts/verify_repo.py
 
-clean:
-	rm -f *.aux *.log *.bbl *.blg *.out $(PAPER).pdf
+quant-check:
+	@python3 src/test_quant_sim.py
 
-.PHONY: all sync check clean
+rehearse-cpu:
+	@python3 scripts/cpu_rehearsal.py
+
+plan:
+	@python3 src/run_pipeline.py --dry-run
+
+status:
+	@python3 src/run_pipeline.py --status
+
+rehearse:
+	@python3 src/run_pipeline.py --mock
+
+sweep:
+	@python3 src/run_pipeline.py
+
+test:
+	@chmod +x run_smoke_test.sh 2>/dev/null || true
+	@bash run_smoke_test.sh
+
+guard:
+	@python3 src/safety/test_guard.py
+
+stats-check:
+	@python3 src/test_stats.py
+
+paper: check-mock
+	@$(MAKE) -C paper
+
+# Mock figures must never reach the paper. They are watermarked, but a
+# watermark is a last line of defence, not a first one.
+check-mock:
+	@python3 scripts/check_mock.py results/figures
+
+clean-results:
+	rm -rf results/figures results/*.jsonl results/*.json runs
+	@echo "results cleared"

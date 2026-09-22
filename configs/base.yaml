@@ -9,14 +9,26 @@ seed: 42
 
 training:
   learning_rate: 2.0e-4
-  per_device_train_batch_size: 4
+  # Effective batch size 16, exactly as in Med-Pal. Med-Pal split it 4 x 4;
+  # here it is 2 x 8, which is mathematically the same update but halves peak
+  # memory. With a 152k-token vocabulary the logits of a 4-sequence micro-batch
+  # need several GB, and the full-parameter arms do not fit a 15 GB T4 at 4.
+  per_device_train_batch_size: 2
   per_device_eval_batch_size: 8
-  gradient_accumulation_steps: 4      # effective batch size 16
+  gradient_accumulation_steps: 8      # 2 x 8 = effective batch size 16
+  # Recompute activations in the backward pass rather than storing them. Same
+  # maths, less memory, ~25% more time. Applied to every arm, so it cannot
+  # confound the comparison.
+  gradient_checkpointing: true
   num_train_epochs: 3
   lr_scheduler_type: cosine
   warmup_ratio: 0.03
   logging_steps: 10
-  save_strategy: epoch
+  # Only the final model is saved. Per-epoch checkpoints carry the optimizer
+  # state — ~6 GB each for a full-parameter 0.5B run — and three of them
+  # would exceed Kaggle's 20 GB output limit on a single arm. Resuming is
+  # handled per stage by src/run_pipeline.py, so they are not needed.
+  save_strategy: "no"
   optim: adamw_torch
   adam_beta1: 0.9
   adam_beta2: 0.999
@@ -45,10 +57,13 @@ inference:
   top_k: 100
   n_repeats: 3                        # for the Reproducibility x quantization experiment
 
-# The deployment target dictates what QAT must simulate. Changing this without
-# changing the QAT simulation invalidates your central claim.
+# Deployment. Each arm is trained, evaluated and shipped in ONE spec, defined in
+# src/quant_sim.py: qat8 -> q8_0, qat_mixed -> mixed, every other arm -> q4_0.
+# The fp16 arm is additionally evaluated unquantized, as the upper bound.
+# Training (QAT), evaluation and llama-quantize all use the same arithmetic,
+# so the weights scored are exactly the weights the phone holds.
 quantization:
-  target_format: gguf_q4_0
+  target_format: gguf_q4_0          # the format the app ships
   bits: 4
   group_size: 32
   symmetric: true

@@ -11,7 +11,9 @@ identical across arms, which is what makes the comparison controlled.
 
 Methods
 -------
-  fp16      Half-precision full fine-tune. Upper bound on quality.
+  fp16      Full-parameter fine-tune (fp32 weights, fp16 arithmetic on a T4).
+            Evaluated twice: unquantized (upper bound) and rounded to Q4_0
+            with no training awareness (the post-training quantization baseline).
   lora      LoRA adapters on an fp16 base. Practical baseline.
   qlora4    Base loaded in 4-bit NF4, LoRA trained on top.
             NOTE: this is a memory-efficient TRAINING method. Merging adapters
@@ -19,15 +21,15 @@ Methods
             It is NOT the same as QAT. Say so explicitly in your methods
             chapter — the brief warns about conflating PTQ and QAT, and this
             is the same error one step over.
-  qat8      Quantization-aware fine-tuning simulating 8-bit.
-  qat4      Quantization-aware fine-tuning simulating the DEPLOYED 4-bit
-            scheme. Main experiment.
-  qat_mixed QAT with sensitive modules held at higher precision.
-  ptq       No training. Quantizes an existing checkpoint. Baseline only.
+  qat8      Quantization-aware fine-tuning against Q8_0.
+  qat4      Quantization-aware fine-tuning against Q4_0. Main experiment.
+  qat_mixed QAT against Q4_0 with the first and last blocks at Q8_0.
+  ptq       No training; the PTQ baseline is the fp16 arm evaluated at Q4_0.
 
-CRITICAL: the QAT arms must simulate configs/base.yaml -> quantization, which
-must match what you actually ship. Simulating group-32 symmetric int4 and then
-deploying a different scheme means you did not measure QAT.
+The QAT arms fake-quantize with src/quant_sim.py, an exact reimplementation of
+llama.cpp's Q4_0/Q8_0 arithmetic (verified bit-identical against both the C
+reference and llama.cpp's own gguf-py). Training, evaluation and the exported
+GGUF therefore all see the same weights. See src/deploy_specs.py.
 """
 
 from __future__ import annotations
@@ -44,6 +46,7 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 METHODS = ["fp16", "lora", "qlora4", "qat8", "qat4", "qat_mixed", "ptq"]
 
 
@@ -96,22 +99,54 @@ def load_configs(model_key: str) -> tuple[dict, dict]:
 # --------------------------------------------------------------------------- #
 
 def build_dataset(path: Path, system_prompt: str, tokenizer):
-    """JSONL with question/answer -> chat-templated text field."""
+    """JSONL with question/answer -> conversational prompt-completion rows.
+
+    LOSS ON THE ANSWER ONLY. The earlier version rendered the whole
+    conversation into one text field, so the loss also covered the system
+    prompt and the question. The system prompt is identical in every example,
+    so the model memorises it within a few steps and roughly a third of each
+    step's tokens then contribute nothing; worse, the model is also trained to
+    produce users' questions. With prompt/completion rows, TRL masks the prompt
+    and computes the loss on the assistant's answer alone. It also renders the
+    prompt exactly as inference does (chat template with a generation prompt),
+    so training and evaluation see the same format.
+    """
     from datasets import Dataset
 
     rows = [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
     if not rows:
         raise SystemExit(f"No rows in {path}")
 
-    def to_text(r: dict) -> str:
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": r["question"]},
-            {"role": "assistant", "content": r["answer"]},
-        ]
-        return tokenizer.apply_chat_template(messages, tokenize=False)
+    return Dataset.from_list([{
+        "prompt": [{"role": "system", "content": system_prompt},
+                   {"role": "user", "content": r["question"]}],
+        "completion": [{"role": "assistant", "content": r["answer"]}],
+    } for r in rows])
 
-    return Dataset.from_list([{"text": to_text(r)} for r in rows])
+
+# --------------------------------------------------------------------------- #
+# Hardware
+# --------------------------------------------------------------------------- #
+
+def native_bf16() -> bool:
+    """True only where bf16 runs in hardware (compute capability 8.0+).
+
+    torch.cuda.is_bf16_supported() is the wrong test: on a T4 it returns True
+    because bf16 can be EMULATED, several times slower than fp16. Kaggle's T4
+    reported exactly that. Trusting it would have trained every arm in slow
+    emulated precision.
+    """
+    import torch
+    return torch.cuda.is_available() and torch.cuda.get_device_capability(0)[0] >= 8
+
+
+def device_map():
+    """One GPU if there is one, otherwise CPU. A single device on purpose: a
+    0.5B model gains nothing from being split across Kaggle's two T4s. The
+    notebook picks the GPU with the most free memory via CUDA_VISIBLE_DEVICES,
+    so device 0 is always the right one."""
+    import torch
+    return {"": 0} if torch.cuda.is_available() else None
 
 
 # --------------------------------------------------------------------------- #
@@ -122,33 +157,29 @@ def build_model(method: str, hf_id: str, cfg: dict, target_modules: list[str]):
     import torch
     from transformers import AutoModelForCausalLM
 
-    bf16_ok = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
+    bf16 = native_bf16()
+    on_gpu = torch.cuda.is_available()
 
-    # Two different dtypes, for two different reasons.
+    # Two dtypes, for two different reasons.
     #
-    # FROZEN-BASE arms (lora): the base weights never receive gradients, so they
-    # can sit in half precision to save memory.
+    # FROZEN-BASE arms (lora, qlora4): the base never receives gradients, so it
+    # can sit in half precision. PEFT keeps the adapter weights in fp32.
     #
-    # FULL-PARAMETER arms (fp16, qat*): every weight is trained. On a T4 or P100,
-    # which lack bf16, loading those weights in fp16 AND enabling fp16 mixed
-    # precision makes PyTorch's gradient scaler fail with "Attempting to unscale
-    # FP16 gradients". Correct fp16 training keeps fp32 master weights and lets
-    # autocast run the arithmetic in fp16 — which is what "fp16 fine-tuning"
-    # actually means. A 0.5B model in fp32 with Adam is about 8 GB, within a
-    # 16 GB T4.
-    half = torch.bfloat16 if bf16_ok else torch.float16
-    full_param = torch.bfloat16 if bf16_ok else torch.float32
-    dtype = half
-    qcfg = cfg["quantization"]
+    # FULL-PARAMETER arms (fp16, qat*): every weight is trained. On a GPU
+    # without native bf16, the weights must stay fp32 ("master weights") while
+    # autocast runs the arithmetic in fp16 — loading them in fp16 makes the
+    # gradient scaler fail with "Attempting to unscale FP16 gradients". A 0.5B
+    # model in fp32 with Adam is about 8 GB.
+    half = torch.bfloat16 if bf16 else (torch.float16 if on_gpu else torch.float32)
+    full = torch.bfloat16 if bf16 else torch.float32
 
     if method in ("fp16", "ptq"):
-        model = AutoModelForCausalLM.from_pretrained(
-            hf_id, torch_dtype=full_param, device_map={"": 0})
+        model = AutoModelForCausalLM.from_pretrained(hf_id, dtype=full, device_map=device_map())
         return model, None
 
     if method == "lora":
         from peft import LoraConfig
-        model = AutoModelForCausalLM.from_pretrained(hf_id, torch_dtype=dtype, device_map={"": 0})
+        model = AutoModelForCausalLM.from_pretrained(hf_id, dtype=half, device_map=device_map())
         return model, LoraConfig(target_modules=target_modules, **_lora_kwargs(cfg))
 
     if method == "qlora4":
@@ -158,19 +189,19 @@ def build_model(method: str, hf_id: str, cfg: dict, target_modules: list[str]):
         bnb = BitsAndBytesConfig(
             load_in_4bit=True,
             bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=dtype,
+            bnb_4bit_compute_dtype=half,
             bnb_4bit_use_double_quant=True,
         )
         model = AutoModelForCausalLM.from_pretrained(
-            hf_id, quantization_config=bnb, device_map={"": 0}
-        )
-        model = prepare_model_for_kbit_training(model)
+            hf_id, quantization_config=bnb, device_map=device_map())
+        model = prepare_model_for_kbit_training(
+            model, use_gradient_checkpointing=True,
+            gradient_checkpointing_kwargs={"use_reentrant": False})
         return model, LoraConfig(target_modules=target_modules, **_lora_kwargs(cfg))
 
     if method.startswith("qat"):
-        model = AutoModelForCausalLM.from_pretrained(
-            hf_id, torch_dtype=full_param, device_map={"": 0})
-        model = apply_qat(model, method, qcfg)
+        model = AutoModelForCausalLM.from_pretrained(hf_id, dtype=full, device_map=device_map())
+        model = apply_qat(model, method)
         return model, None
 
     raise SystemExit(f"Unhandled method {method!r}")
@@ -182,120 +213,36 @@ def _lora_kwargs(cfg: dict) -> dict:
     return lora
 
 
-def apply_qat(model, method: str, qcfg: dict):
-    """Insert fake quantization so the model trains against the rounding error
-    it will suffer on device.
+def apply_qat(model, method: str):
+    """Quantization-aware training against the EXACT deployed quantizer.
 
-    WHAT IS SIMULATED, AND WHY. The deployed format is GGUF, quantized by
-    llama.cpp. For Q4_0 that means WEIGHT-ONLY, SYMMETRIC int4 in groups of 32.
-    So qat4 simulates exactly that. torchao's popular Int8DynActInt4 preset is
-    the wrong target here: it also fake-quantizes activations per token, which
-    is the ExecuTorch/XNNPACK recipe, not the llama.cpp one. Training against
-    a representation you do not deploy measures nothing.
+    The fake quantizer is src/quant_sim.py, a reimplementation of llama.cpp's
+    own Q4_0 / Q8_0 arithmetic. The forward pass therefore sees precisely the
+    weights the phone will hold. An earlier version used torchao's symmetric
+    int4, which rounds to a different grid — Q4_0 maps the largest-magnitude
+    value to -8 with its sign kept, so its step is max/8, not max/7.5 — and
+    whose import path changed between torchao releases. Dropping it removes
+    both the mismatch and the dependency.
 
-    (llama.cpp does quantize activations to 8-bit in blocks of 32 at runtime.
-    The simulation does not model that. It is benign relative to the weight
-    error and is a small limitation worth one sentence in the methods.)
-
-    API: torchao's recommended interface is quantize_ with QATConfig. The legacy
-    Quantizer classes are documented as likely to be removed, and the
-    torchao.quantization.prototype.qat path this file originally used no longer
-    exists. Both current routes are tried, newest first.
+      qat4       every linear layer at Q4_0
+      qat8       every linear layer at Q8_0
+      qat_mixed  Q4_0, first and last transformer blocks at Q8_0
     """
-    import torch
+    from quant_sim import deploy_spec_for_arm, prepare_qat
 
-    bits = 8 if method == "qat8" else 4
-    group = qcfg.get("group_size", 32)
-    dtype = torch.int8 if bits == 8 else torch.int4
-
-    # Route 1: current API.
-    try:
-        from torchao.quantization import quantize_
-        from torchao.quantization.qat import IntxFakeQuantizeConfig, QATConfig
-
-        wcfg = IntxFakeQuantizeConfig(dtype, group_size=group, is_symmetric=True)
-
-        if method == "qat_mixed":
-            # Hold the most quantization-sensitive modules out of the simulation.
-            # In Gemma-3-270M roughly 63% of parameters are embeddings, so this
-            # choice protects most of that model. lm_head and embeddings are
-            # not nn.Linear-with-fake-quant targets anyway; exclude the first and
-            # last transformer blocks as well, which are consistently the most
-            # sensitive.
-            n_layers = getattr(getattr(model, "config", None), "num_hidden_layers", 0)
-            protected = {f"layers.{i}." for i in (0, n_layers - 1)} if n_layers else set()
-
-            def filt(mod, fqn):
-                return (isinstance(mod, torch.nn.Linear)
-                        and "lm_head" not in fqn
-                        and not any(p in fqn + "." for p in protected))
-
-            quantize_(model, QATConfig(weight_config=wcfg, step="prepare"), filter_fn=filt)
-        else:
-            quantize_(model, QATConfig(weight_config=wcfg, step="prepare"),
-                      filter_fn=lambda mod, fqn: isinstance(mod, torch.nn.Linear)
-                      and "lm_head" not in fqn)
-
-        n = sum(1 for m in model.modules() if "FakeQuant" in type(m).__name__)
-        print(f"  QAT prepared via QATConfig: int{bits} weight-only, group {group}, "
-              f"symmetric -> {n} fake-quantized modules")
-        if n == 0:
-            raise SystemExit("QAT inserted no fake-quantized modules — nothing would "
-                             "be simulated. Check the torchao version.")
-        return model
-
-    except ImportError as e1:
-        route1 = e1
-
-    # Route 2: legacy Quantizer class. Coarser: it has no weight-only symmetric
-    # int4 option, so the simulated scheme differs from Q4_0. Record it.
-    try:
-        from torchao.quantization.qat import Int8DynActInt4WeightQATQuantizer
-        print("  WARNING: falling back to the legacy Int8DynActInt4 quantizer.")
-        print("  It also fake-quantizes activations, which Q4_0 deployment does")
-        print("  not match exactly. Upgrade torchao and state this if you keep it.")
-        try:
-            q = Int8DynActInt4WeightQATQuantizer(group_size=group)
-        except TypeError:
-            q = Int8DynActInt4WeightQATQuantizer(groupsize=group)
-        return q.prepare(model)
-    except ImportError as e2:
-        raise SystemExit(
-            "No usable torchao QAT API found.\n"
-            f"  current API: {route1}\n"
-            f"  legacy API:  {e2}\n"
-            "Install a recent torchao:  pip install -U torchao")
+    spec = deploy_spec_for_arm(method)
+    counts = prepare_qat(model, spec)
+    if not counts:
+        raise SystemExit("QAT attached no fake quantizers — nothing would be simulated.")
+    print(f"  QAT ({spec}): " + ", ".join(f"{n} layers at {f}" for f, n in sorted(counts.items())))
+    return model
 
 
 def strip_fake_quant(model) -> int:
-    """Replace every fake-quantized Linear with a plain nn.Linear carrying the
-    trained weights. Returns the number replaced.
-
-    Deliberately NOT torchao's convert step. Convert would quantize the weights
-    into torchao's own int4 layout, which (a) is not what llama.cpp consumes and
-    (b) needs recent-GPU kernels that Kaggle's T4 and P100 lack. What llama.cpp
-    wants is ordinary high-precision weights that have LEARNED to survive
-    rounding — which is exactly what QAT training produces. Export those, and
-    let llama.cpp apply the matching scheme.
-    """
-    import torch
-
-    replaced = 0
-    for name, mod in list(model.named_modules()):
-        if "FakeQuant" not in type(mod).__name__ or not isinstance(mod, torch.nn.Linear):
-            continue
-        plain = torch.nn.Linear(mod.in_features, mod.out_features,
-                                bias=mod.bias is not None,
-                                device=mod.weight.device, dtype=mod.weight.dtype)
-        with torch.no_grad():
-            plain.weight.copy_(mod.weight)
-            if mod.bias is not None:
-                plain.bias.copy_(mod.bias)
-        parent_name, _, child = name.rpartition(".")
-        parent = model.get_submodule(parent_name) if parent_name else model
-        setattr(parent, child, plain)
-        replaced += 1
-    return replaced
+    """Remove the fake-quant wrappers before saving, keeping the trained latent
+    weights, so the checkpoint is an ordinary model llama.cpp can convert."""
+    from quant_sim import strip_qat
+    return strip_qat(model)
 
 
 # --------------------------------------------------------------------------- #
@@ -367,9 +314,17 @@ def main() -> int:
         import inspect
         import torch
 
-        # fp16 on Kaggle. Neither the T4 (sm_75) nor the P100 (sm_60) supports
-        # bf16, so mixed precision must be fp16 there.
-        use_bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
+        # fp16 on Kaggle: neither the T4 (sm_75) nor the P100 (sm_60) runs bf16
+        # in hardware. See native_bf16() for why is_bf16_supported() is not used.
+        use_bf16 = native_bf16()
+
+        # Gradient checkpointing recomputes activations in the backward pass
+        # instead of storing them. It does not change the maths, only memory
+        # and time, so it cannot confound the comparison between arms. It is on
+        # because the full-parameter arms are tight on a 15 GB T4: fp32 weights,
+        # gradients and Adam state are about 8 GB before any activations, and a
+        # 152k-token vocabulary makes the logits alone ~1 GB per sequence.
+        grad_ckpt = bool(t.get("gradient_checkpointing", True))
 
         wanted = dict(
             output_dir=str(out_dir),
@@ -389,22 +344,41 @@ def main() -> int:
             max_grad_norm=t["max_grad_norm"],
             bf16=use_bf16,
             fp16=(not use_bf16) and torch.cuda.is_available() and args.method != "qlora4",
+            gradient_checkpointing=grad_ckpt,
+            gradient_checkpointing_kwargs={"use_reentrant": False} if grad_ckpt else None,
+            # Explicit, rather than relying on TRL's default for prompt-completion
+            # data: the loss covers the assistant's answer only.
+            completion_only_loss=True,
             report_to="none",
         )
         if args.max_steps:
             wanted["max_steps"] = args.max_steps
 
-        # TRL renamed max_seq_length to max_length. Pass whichever this installed
-        # version accepts, and drop anything it does not recognise, so a TRL
-        # upgrade on Kaggle does not break the run with an unexpected-keyword error.
+        # Library versions rename settings. Known renames are translated
+        # EXPLICITLY; anything else unrecognised stops the run.
+        #
+        # An earlier version silently dropped unrecognised keys "for safety".
+        # Run against transformers 5 it dropped warmup_ratio — every arm would
+        # have trained with no learning-rate warmup, a silent change to the
+        # fixed configuration. A config that cannot be applied must fail
+        # loudly, not quietly become a different config.
         accepted = set(inspect.signature(SFTConfig.__init__).parameters)
-        seq_key = "max_length" if "max_length" in accepted else "max_seq_length"
-        wanted[seq_key] = t["max_seq_length"]
-        dropped = sorted(k for k in wanted if k not in accepted)
-        sft = SFTConfig(**{k: v for k, v in wanted.items() if k in accepted})
-        if dropped:
-            print(f"[{run_id}] note: this TRL version ignores {dropped}")
-        print(f"[{run_id}] precision: {'bf16' if use_bf16 else 'fp16'}"
+        wanted["max_length" if "max_length" in accepted else "max_seq_length"] = t["max_seq_length"]
+        if "warmup_ratio" not in accepted:
+            # transformers 5: warmup_steps takes a float in [0, 1) as a ratio.
+            wanted["warmup_steps"] = float(wanted.pop("warmup_ratio"))
+        if wanted.get("gradient_checkpointing_kwargs") is None:
+            wanted.pop("gradient_checkpointing_kwargs", None)
+
+        unknown = sorted(k for k in wanted if k not in accepted)
+        if unknown:
+            raise SystemExit(
+                f"[{run_id}] This TRL/transformers version does not accept {unknown}. "
+                f"Add an explicit translation above rather than dropping them — "
+                f"dropping a setting silently changes the experiment.")
+        sft = SFTConfig(**wanted)
+        precision = "bf16" if use_bf16 else ("fp16" if torch.cuda.is_available() else "fp32 (CPU)")
+        print(f"[{run_id}] precision: {precision}   gradient checkpointing: {grad_ckpt}"
               f"{'  (smoke run: ' + str(args.max_steps) + ' steps)' if args.max_steps else ''}")
 
         trainer = SFTTrainer(
@@ -422,8 +396,22 @@ def main() -> int:
             n = strip_fake_quant(trainer.model)
             print(f"[{run_id}] stripped {n} fake-quant modules before saving")
 
+        # Full-parameter checkpoints are saved in fp16. Evaluation loads them in
+        # fp16 and llama.cpp converts from f16, so nothing downstream sees more
+        # precision than this — and it halves the size (~1 GB instead of 2 GB
+        # for 0.5B), which matters against Kaggle's 20 GB output limit.
+        if peft_cfg is None and next(trainer.model.parameters()).dtype == torch.float32:
+            trainer.model.to(torch.float16)
+
         trainer.save_model(str(out_dir / "final"))
         tok.save_pretrained(str(out_dir / "final"))
+
+        if torch.cuda.is_available():
+            # Peak memory is worth recording: it shows the headroom per arm on
+            # the T4, and training cost is a legitimate secondary result.
+            peak = torch.cuda.max_memory_allocated() / 1e9
+            total = torch.cuda.get_device_properties(0).total_memory / 1e9
+            print(f"[{run_id}] peak GPU memory: {peak:.2f} GB of {total:.1f} GB")
 
         meta.status = "complete"
 

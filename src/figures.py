@@ -55,13 +55,24 @@ plt.rcParams.update({
 })
 
 
+MOCK_MARK = "MOCK_DATA_DO_NOT_PUBLISH"
+
+
 def save(fig, out: Path, name: str, mock: bool) -> None:
     if mock:
         fig.text(0.5, 0.5, "MOCK DATA", fontsize=54, color="red", alpha=0.13,
                  ha="center", va="center", rotation=28, transform=fig.transFigure,
                  zorder=1000, weight="bold")
     for ext in ("png", "pdf"):
-        fig.savefig(out / f"{name}.{ext}")
+        # The visible watermark is for people. For software, each mock file is
+        # also stamped in its metadata — the PDF info dictionary or a PNG text
+        # chunk, both stored uncompressed — because the watermark text itself is
+        # not reliably findable: matplotlib 3.11 writes text as glyph codes, and
+        # a detector scanning for "MOCK" missed every mock figure.
+        meta = {}
+        if mock:
+            meta = {"Keywords": MOCK_MARK} if ext == "pdf" else {"Description": MOCK_MARK}
+        fig.savefig(out / f"{name}.{ext}", metadata=meta)
     plt.close(fig)
     print(f"  {name}.png / .pdf")
 
@@ -87,7 +98,7 @@ def good_quality_pct(items: list[dict]) -> float:
 
 # --------------------------------------------------------------------- tables
 
-def table_scores(by_arm: dict, out: Path) -> str:
+def table_scores(by_arm: dict, out: Path, mock: bool = False) -> str:
     hdr_md = ["Arm", "n", "Median", "IQR", "Safety+Accuracy (%)"]
     # LaTeX: an unescaped % starts a comment and would silently swallow the rest
     # of the header line. En-dashes are written as -- rather than the literal
@@ -115,6 +126,11 @@ def table_scores(by_arm: dict, out: Path) -> str:
            + "".join(" & ".join(r) + " \\\\\n" for r in rows_tex)
            + "\\hline\n\\end{tabular}\n\\end{table}\n")
 
+    if mock:
+        # Tables carry the same stamp as figures. A mock table once reached the
+        # paper folder unnoticed because nothing marked it as synthetic.
+        md = f"<!-- {MOCK_MARK} -->\n**MOCK DATA — do not publish**\n\n" + md
+        tex = f"% {MOCK_MARK}\n" + tex
     (out / "table1_scores.md").write_text(md)
     (out / "table1_scores.tex").write_text(tex)
     print("  table1_scores.md / .tex")
@@ -145,14 +161,19 @@ def table_bench(bench: dict, out: Path) -> None:
     md += (f"Device: {d.get('model','?')} · Android {d.get('android','?')} · "
            f"{d.get('soc','?')} · {d.get('total_ram','?')} RAM\n\n")
     md += f"Model file: {bench.get('model_file','?')} ({bench.get('model_file_mb','?')} MB)\n\n"
+    md += (f"Runs: {bench.get('cold_runs', '?')} cold, "
+           f"{bench.get('steady_runs', '?')} steady-state\n\n")
     md += "| Metric | Median | Range | Spread (%) |\n|---|---|---|---|\n"
     for m in bench.get("metrics", []):
         if not m.get("n"):
             continue
         md += (f"| {m['metric'].replace('_',' ')} ({m['unit']}) | {m['median']} | "
                f"{m['min']}–{m['max']} | {m['spread_pct']} |\n")
-    md += ("\nMedian of repeated runs. Low-end devices throttle thermally, so a "
-           "spread above roughly 25% indicates throttling rather than noise.\n")
+    md += ("\nMedian of repeated runs. Cold-start and steady-state figures are "
+           "reported separately: the first run reads weights from storage with "
+           "empty caches, so pooling it with the rest inflates the spread and "
+           "produces a false throttling signal. A spread above roughly 25% on a "
+           "steady-state metric indicates thermal throttling rather than noise.\n")
     (out / "table3_benchmark.md").write_text(md)
     print("  table3_benchmark.md")
 
@@ -321,12 +342,24 @@ def main() -> int:
     res = lambda p: Path(p) if Path(p).is_absolute() else ROOT / p  # noqa: E731
     out = res(a.out); out.mkdir(parents=True, exist_ok=True)
 
+    # A marker file, not just a watermark. Watermarked text lives inside
+    # compressed PDF streams, so grep-based guards silently pass mock figures
+    # through — a defect this repo actually had. The marker cannot be missed.
+    marker = out / "MOCK_DATA_DO_NOT_PUBLISH"
+    if a.mock:
+        marker.write_text(
+            "Figures in this directory were generated from SYNTHETIC data.\n"
+            "They exist to validate the pipeline and must never appear in the\n"
+            "report or the paper. Regenerate without --mock to clear this.\n")
+    else:
+        marker.unlink(missing_ok=True)
+
     rows = [json.loads(l) for l in res(a.scores).read_text().splitlines() if l.strip()]
     unguarded = [r for r in rows if not r["arm"].endswith("+guard")] or rows
     by_arm = group_scores(unguarded)
 
     print(f"Writing to {out}\n")
-    table_scores(by_arm, out)
+    table_scores(by_arm, out, a.mock)
     fig_box(by_arm, out, a.mock)
     fig_domains(by_arm, out, a.mock)
     fig_reproducibility(by_arm, out, a.mock)

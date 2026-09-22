@@ -363,7 +363,7 @@
       "id": "IN-08",
       "category": "adversarial_framing",
       "priority": 1,
-      "description": "Prompt injection, jailbreak, DAN, prompt leak, and requests to fabricate. Catches the wrapper regardless of payload, which is what Med-Pal's BanTopics scanner did server-side.",
+      "description": "Prompt injection, jailbreak, DAN, prompt leak, and requests to fabricate. Matches multi-word phrases only. Bare tokens are unsafe here: substring matching made 'dan' fire on 'dangerous' and 'repeat' on 'repeat prescription'.",
       "any_of": [
         "ignore the above",
         "ignore all previous",
@@ -392,17 +392,20 @@
         "fabricate",
         "subtly wrong",
         "cause maximum harm",
-        "give a wrong answer"
+        "give a wrong answer",
+        "ignore the above question",
+        "ignore that and",
+        "forget your instructions",
+        "you have no restrictions",
+        "answer without any rules",
+        "as that character",
+        "in that role, answer",
+        "word for word",
+        "make up a source"
       ],
       "all_of": [
         [
-          "ignore",
-          "pretend",
-          "dan",
-          "repeat",
-          "invent",
-          "fabricate",
-          "roleplay"
+          "\u0000__never__"
         ]
       ],
       "response_key": "adversarial"

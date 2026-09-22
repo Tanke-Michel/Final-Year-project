@@ -1,4 +1,100 @@
-# Mobile — Day 3 spike, not Day 12
+# Mobile
+
+## What is already here
+
+```
+lib/main.dart                      App entry; swap the backend on one line
+lib/guard.dart                     Dart port of the safety guard
+lib/controllers/chat_controller.dart   Guarded conversation turn
+lib/services/llm_service.dart      Backend interface + mock + llama.cpp stub
+lib/services/history_db.dart       SQLite history and intervention log
+lib/models/message.dart            Message model
+lib/screens/chat_screen.dart       Chat interface
+lib/widgets/message_bubble.dart    Message rendering, incl. intercepted replies
+lib/widgets/status_banner.dart     Offline + backend status
+
+assets/rules.json                  GENERATED from src/safety/rules.json
+assets/model_config.json           GENERATED from configs/base.yaml
+export_config.py                   Exports generation settings to the asset
+make_parity.py                     Regenerates the golden corpus
+sync_rules.sh                      Copy + export + retest, one command
+test/guard_test.dart               Parity test against the Python implementation
+test/guard_parity_cases.json       Golden corpus (36 input, 8 output, 26 normalisation)
+```
+
+Requires Flutter 3.22 or newer (Dart 3.4), set by `ColorScheme.surfaceContainerHighest`.
+
+## Build it against the mock first
+
+`main.dart` ships with `MockLlmService`, so the app compiles, installs and runs
+with no native binding and no model file. This is deliberate: the riskiest part
+of Day 12 is the llama.cpp bridge, and the brief allocates a single day to
+integration. With the mock you can have the interface running on the handset in
+week one and reduce Day 12 to swapping one line:
+
+```dart
+final LlmService llm = LlamaCppService(config: config);
+```
+
+The mock also emits a degraded answer roughly one time in eight — a numeric dose
+or a truncated reply — so the guard's OUTPUT rules are exercised on the device
+rather than only in the Python tests.
+
+## Two generated assets, never edited by hand
+
+| Asset | Generated from | Why it must match |
+|---|---|---|
+| `assets/rules.json` | `src/safety/rules.json` | The guard on the phone must decide identically to the one that produced the safety results |
+| `assets/model_config.json` | `configs/base.yaml` | The app must generate at the same temperature, top-p and top-k as the evaluation harness, or the quality figures describe a different system |
+
+```bash
+./mobile/sync_rules.sh    # copies, exports, retests, regenerates the corpus
+```
+
+## The safety architecture is structural, not procedural
+
+`ChatController` holds the model privately and never calls it. The only route to
+generation is `Guard.process`, which checks the input, invokes the model only if
+the input passes, then checks the output. There is no method that reaches the
+model without the guard — bypassing it requires editing the controller, not
+merely forgetting a call. Given a sub-billion-parameter model answering
+medication questions, that distinction matters.
+
+The intervention log stores the rule identifier, category and timestamp. It does
+**not** store question text: the log exists to count rule fires for the results
+chapter, not to keep a record of what someone asked on a shared phone.
+
+## The parity test, and why it decides whether your results are valid
+
+Your reported safety numbers come from the **Python** guard, running on your
+laptop during Day 11. The app ships the **Dart** guard. If the two behave
+differently, the system you demonstrate is not the system you measured, and the
+safety section of your results does not describe the deliverable.
+
+`guard_test.dart` replays a golden corpus generated from the Python
+implementation and fails on any divergence — block decision, rule id, category,
+or normalised text.
+
+```bash
+./mobile/sync_rules.sh                    # after any rules.json edit
+dart test mobile/test/guard_test.dart     # must be all green before Day 12
+```
+
+Two divergences already found and closed, both of which would have been silent:
+
+- **Unicode normalisation.** Python used NFKD; Dart has no core equivalent. The
+  fold map now lives in `rules.json` so both run identical preprocessing. This
+  is not academic — francophone users type "problème" and "à jeun", and neither
+  matches without folding.
+- **Rule ordering.** Python's sort is stable; Dart's `List.sort` is not. Rules
+  sharing a priority could evaluate in a different order on device. Both now
+  sort on `(priority, id)`, which is a total key.
+
+Mention the parity test in your defence. "The on-device guard is verified
+against the implementation used to produce the results" is a stronger answer
+than "I ported it carefully."
+
+## Day 3 spike, not Day 12
 
 ## Why this is on Day 3
 
@@ -44,6 +140,27 @@ proxy for peak RSS.
 
 ## Benchmarks for Day 13
 
-Model file size, peak RSS, cold-start time, time-to-first-token, tokens/second.
-**Repeat each measurement at least five times and report the median.** Low-end
-phones throttle thermally, so a single measurement is noise.
+The loop is wired end to end. The app emits one `OHAI_BENCH` line per run to
+logcat; `src/benchmark.py` parses them.
+
+```bash
+cd mobile && flutter run --profile      # PROFILE, never debug
+# open the Benchmark screen, set runs and cooldown, press Run
+python src/benchmark.py --gguf runs/<run>/gguf/model-q4_0.gguf --collect
+```
+
+The contract lives in `lib/services/bench_logger.dart`. Change a field name
+there and you must change `REQUIRED` in `src/benchmark.py` — the parser reports
+which keys are missing rather than silently reporting zeros.
+
+Three things that decide whether the numbers mean anything:
+
+- **Profile mode.** Debug builds run unoptimised Dart; the figures are
+  meaningless and a reviewer who knows Flutter will ask.
+- **Cold start is reported separately.** The first run reads weights from
+  storage with empty caches, so its time-to-first-token is several times the
+  steady-state figure. Pooling them inflates the spread and produces a false
+  throttling signal — which would become a wrong claim about the device.
+- **Cooldown between runs.** Low-end handsets throttle within seconds. A spread
+  above roughly 25% on a steady-state metric means throttling, not variance;
+  increase the cooldown and rerun.
