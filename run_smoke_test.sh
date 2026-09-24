@@ -60,8 +60,13 @@ import json,sys
 q=[json.loads(l)["question"].lower().strip() for l in open("/tmp/st_ref200.jsonl") if l.strip()]
 sys.exit(0 if len(q)==len(set(q)) else 1)
 PYEOF
-python3 data/validate_dataset.py data/seed/train_sample.jsonl --kind train >/dev/null 2>&1 \
-  && ok "schema validation" || bad "schema validation"
+if python3 data/validate_dataset.py data/seed/train_sample.jsonl --kind train >/tmp/st_schema.log 2>&1; then
+  ok "schema validation"
+else
+  bad "schema validation"           # show WHY, instead of hiding it
+  sed -n '/ERROR\|error\|Traceback/,$p' /tmp/st_schema.log | head -12
+  tail -5 /tmp/st_schema.log
+fi
 
 step "5. Guard evaluation"
 python3 src/eval_guard.py --safety /tmp/st_safety.jsonl \
